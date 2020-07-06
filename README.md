@@ -4,7 +4,7 @@ It's a strategizer for RAML.
 
 ## What?
 
-More specifically it's an API mock service that supports the use of strategies, and allows configuration of the mocking service to follow specific strategies. For multiple RAML files.
+More specifically it's an API mock service that supports the use of strategies, and allows configuration of the mocking service to follow specific strategies. For multiple RAML files, supporting version 1.0 of the RAML specification.
 
 ## Why?
 
@@ -29,7 +29,7 @@ Usually RAML endpoints only have one example, so how to define multiple ones?
 
 #### Multiple RAML examples
 
-We use an undocumented RAML feature to let you specify multiple named examples for your endpoints, and then you select which example to run for the next call to the endpoint.
+We use the 'examples' attribute for for your endpoint responses. By default it will return the first of these. You can then select which example to run for the next call to the endpoint.
 
 Here's an example of examples:
 
