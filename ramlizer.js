@@ -169,6 +169,10 @@ function fillStrategies(api) {
           );
         }
 
+        // Set defaults to be 200 response code and first example
+        const selectedCode = response.code().value();
+        const selectedExample = body.examples && body.examples[0].name;
+
         // Loop through examples
         _.each(body.examples, example => {
           spinner.succeed(
@@ -177,19 +181,13 @@ function fillStrategies(api) {
               .value()} contains an example named '${example.name}'`
           );
 
-          let selectedCode = "200";
-
-          // if (!method.method().responses["200"]) {
-          //   selectedCode = _.sample(method.method().responses).code;
-          // }
-
           plannedMethodResponseCodes[
             `${method.method()}:${resource.completeRelativeUri()}`
           ] = selectedCode;
 
           plannedMethodExampleNames[
             `${method.method()}:${resource.completeRelativeUri()}`
-          ] = "default";
+          ] = selectedExample;
         });
       });
     });
