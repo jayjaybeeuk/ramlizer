@@ -1,6 +1,6 @@
 {
-  "name": "@jayjaybeeuk/ramlizerjs",
-  "version": "1.0.0",
+  "name": "ramlizer",
+  "version": "0.0.5",
   "description": "A strategizer for RAML",
   "main": "ramlizer.js",
   "bin": {
@@ -10,9 +10,9 @@
     "example": "node ./ramlizer.js --folder ./example_raml/ --port 8080",
     "exampleDebug": "node --inspect-brk ./ramlizer.js --folder ./example_raml/ --port 8080"
   },
-  "author": "James Bolton <james@james-bolton.com>",
+  "author": "Dave Irvine <dave@daveirvine.me>",
   "contributors": [
-    "Dave Irvine <dave@daveirvine.me>"
+    "James Bolton <james@james-bolton.com>"
   ],
   "license": "MIT",
   "dependencies": {
