@@ -1,20 +1,18 @@
 {
-  "name": "ramlizer",
-  "version": "0.0.5",
+  "name": "@jayjaybeeuk/ramlizerjs",
+  "version": "1.0.0",
   "description": "A strategizer for RAML",
   "main": "ramlizer.js",
   "bin": {
-    "ramlizer": "./ramlizer.js"
+    "ramlizer": "ramlizer.js"
   },
   "scripts": {
     "example": "node ./ramlizer.js --folder ./example_raml/ --port 8080",
     "exampleDebug": "node --inspect-brk ./ramlizer.js --folder ./example_raml/ --port 8080"
   },
-  "author": "Dave Irvine <dave@daveirvine.me>",
+  "author": "James Bolton <james@james-bolton.com>",
   "contributors": [
-    {
-      "name": "James Bolton"
-    }
+    "Dave Irvine <dave@daveirvine.me>"
   ],
   "license": "MIT",
   "dependencies": {
@@ -28,5 +26,14 @@
     "osprey-resources": "^0.8.0",
     "raml-1-parser": "^1.1.66",
     "yargs": "^11.0.0"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jayjaybeeuk/ramlizer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jayjaybeeuk/ramlizer/issues"
+  },
+  "homepage": "https://github.com/jayjaybeeuk/ramlizer#readme"
 }
