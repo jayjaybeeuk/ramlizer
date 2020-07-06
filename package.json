@@ -11,6 +11,11 @@
     "exampleDebug": "node --inspect-brk ./ramlizer.js --folder ./example_raml/ --port 8080"
   },
   "author": "Dave Irvine <dave@daveirvine.me>",
+  "contributors": [
+    {
+      "name": "James Bolton"
+    }
+  ],
   "license": "MIT",
   "dependencies": {
     "body-parser": "^1.18.3",
