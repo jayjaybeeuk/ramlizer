@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-const argv = require("yargs")
+const { argv } = require("yargs")
   .option("folder", {
     alias: "f",
     describe: "path to the raml files to mock",
     requiresArg: true,
     type: "string"
   })
-  .demandOption("folder").argv;
+  .demandOption("folder");
 
 const _ = require("lodash");
 const ora = require("ora");
@@ -28,7 +28,7 @@ spinner.start("Loading RAML");
 const plannedMethodResponseCodes = {};
 const plannedMethodExampleNames = {};
 
-//Set up app
+// Set up app
 const app = osprey.Router();
 
 function mockHandler(handledRoute) {
@@ -46,7 +46,7 @@ function mockHandler(handledRoute) {
     const types = Object.keys(bodies);
     const type = negotiator.mediaType(types);
     const body = bodies[type];
-    const properties = body.properties;
+    const { properties } = body;
 
     const response = {};
 
@@ -73,7 +73,9 @@ function mockHandler(handledRoute) {
       });
     }
 
-    res.statusCode = plannedResponse.code;
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
     res.write(JSON.stringify(response));
     res.end();
   };
@@ -114,37 +116,46 @@ function scenarioConfigurator(req, res) {
   res.end();
 }
 
-function fillStrategies(raml) {
-  raml.resources.forEach(resource => {
-    spinner.info(`Discovering strategies for: ${resource.relativeUri}`);
-    resource.methods.forEach(resourceMethod => {
+function fillStrategies(api) {
+  api.allResources().forEach(resource => {
+    if (resource.methods().length === 0) {
       spinner.info(
-        `${resource.relativeUri} has method ${resourceMethod.method}`
+        `${resource.completeRelativeUri()} has no methods, skipping`
+      );
+      return;
+    }
+
+    resource.methods().forEach(method => {
+      spinner.succeed(
+        `${resource.completeRelativeUri()} has method ${method.method()}`
       );
 
-      if (!resourceMethod.responses) {
+      if (method.responses().length === 0) {
         spinner.warn(
-          `${resource.relativeUri}:${
-            resourceMethod.method
-          } has no responses, skipping`
+          `${resource.completeRelativeUri()}:${method.method()} has no responses, skipping`
         );
         return;
       }
 
-      _.each(resourceMethod.responses, methodResponse => {
-        spinner.info(
-          `${resource.relativeUri}:${resourceMethod.method} will produce a '${
-            methodResponse.code
-          }' response code`
+      method.responses().forEach(response => {
+        spinner.succeed(
+          `${resource.completeRelativeUri()}:${method.method()} will produce a '${response
+            .code()
+            .value()}' response code`
         );
 
-        const bodies = methodResponse.body;
+        const bodies = response.toJSON().body;
+
+        if (!bodies) {
+          spinner.warn(
+            `${resource.completeRelativeUri()}:${method.method()} has no body, skipping`
+          );
+          return;
+        }
 
         if (_.size(bodies) > 1) {
           spinner.warn(
-            `${resource.relativeUri}:${
-              resourceMethod.method
-            } has multiple body types, picking the first`
+            `${resource.completeRelativeUri()}:${method.method()} has multiple body types, picking the first`
           );
         }
 
@@ -152,41 +163,35 @@ function fillStrategies(raml) {
 
         if (!body.examples) {
           spinner.warn(
-            `${resource.relativeUri}:${resourceMethod.method}:${
-              methodResponse.code
-            } has no examples, skipping`
+            `${resource.completeRelativeUri()}:${method.method()}:${response
+              .code()
+              .value()} has no examples, skipping`
           );
-          return;
         }
 
+        // Loop through examples
         _.each(body.examples, example => {
-          spinner.info(
-            `${resource.relativeUri}:${resourceMethod.method}:${
-              methodResponse.code
-            } contains an example named '${example.name}'`
+          spinner.succeed(
+            `${resource.completeRelativeUri()}:${method.method()}:${response
+              .code()
+              .value()} contains an example named '${example.name}'`
           );
+
+          let selectedCode = "200";
+
+          // if (!method.method().responses["200"]) {
+          //   selectedCode = _.sample(method.method().responses).code;
+          // }
+
+          plannedMethodResponseCodes[
+            `${method.method()}:${resource.completeRelativeUri()}`
+          ] = selectedCode;
+
+          plannedMethodExampleNames[
+            `${method.method()}:${resource.completeRelativeUri()}`
+          ] = "default";
         });
       });
-
-      let selectedCode = "200";
-
-      if (!resourceMethod.responses["200"]) {
-        selectedCode = _.sample(resourceMethod.responses).code;
-      }
-
-      spinner.info(
-        `The first call to ${resource.relativeUri}:${
-          resourceMethod.method
-        } will receive a '${selectedCode}' response`
-      );
-
-      plannedMethodResponseCodes[
-        `${resourceMethod.method}:${resource.relativeUri}`
-      ] = selectedCode;
-
-      plannedMethodExampleNames[
-        `${resourceMethod.method}:${resource.relativeUri}`
-      ] = "default";
     });
   });
 }
@@ -197,21 +202,18 @@ function startServer(argv) {
 
   app.use(morgan("combined"));
   app.use(bodyParser.json());
-  app.post("/" + endpoint, scenarioConfigurator);
+  app.post(`/${endpoint}`, scenarioConfigurator);
 
   spinner.succeed();
   spinner.start(
-    "Listening for configuration requests on http://localhost:" +
-      port +
-      "/" +
-      endpoint
+    `Listening for configuration requests on http://localhost:${port}/${endpoint}`
   );
 }
 
 function applyRAML(raml, file) {
-  //Start servers
+  // Start servers
   spinner.succeed();
-  spinner.start("Creating HTTP mock services for " + file);
+  spinner.start(`Creating HTTP mock services for ${file}`);
 
   app.use(mockServer(raml));
   app.use(osprey.errorHandler());
@@ -221,37 +223,33 @@ function portListener(argv) {
   spinner.succeed();
   spinner.start("Launching HTTP server");
   const server = http.createServer((req, res) => {
-      app(req, res, finalhandler(req, res));
-    }),
-    port = argv.port ? argv.port : 8080;
+    app(req, res, finalhandler(req, res));
+  });
+  const port = argv.port ? argv.port : 8080;
 
   server.listen(port, () => {
     spinner.succeed();
-    spinner.info("Listening on http://localhost:" + port);
+    spinner.info(`Listening on http://localhost:${port}`);
   });
 }
 
 function parseRAML(file) {
-  //
-  let raml = "";
-  // Parse Raml based on file
   ramlParser
-    .loadRAML(file, { rejectOnErrors: true })
-    .then(ramlApi => {
+    .loadApi(file)
+    .then(api => {
       spinner.succeed();
-      spinner.start("Parsing RAML");
 
-      raml = ramlApi.expand(true).toJSON({
-        serializeMetadata: false
-      });
-
-      spinner.succeed();
       spinner.start("Filling strategy queues");
 
-      fillStrategies(raml);
+      fillStrategies(api);
 
-      //Apply RAML strategies to server
-      applyRAML(raml, file);
+      // Apply RAML strategies to server
+      applyRAML(
+        api.expand(true).toJSON({
+          serializeMetadata: false
+        }),
+        file
+      );
     })
     .catch(err => {
       console.log(err);
@@ -263,14 +261,14 @@ const fs = require("fs");
 
 startServer(argv);
 
-fs.readdir(argv.folder, function(err, files) {
+fs.readdir(argv.folder, function (err, files) {
   const ramlFiles = files.filter(el => /\.raml$/.test(el));
 
   ramlFiles.forEach(file => {
     parseRAML(ramlFolder + file);
   });
 
-  setTimeout(function() {
+  setTimeout(function () {
     portListener(argv);
   }, 4000);
 });
