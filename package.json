@@ -17,6 +17,7 @@
   "license": "MIT",
   "dependencies": {
     "body-parser": "^1.18.3",
+    "cors": "^2.8.5",
     "finalhandler": "^1.1.1",
     "lodash": "^4.17.15",
     "morgan": "^1.10.0",
@@ -27,7 +28,6 @@
     "raml-1-parser": "^1.1.66",
     "yargs": "^11.0.0"
   },
-  "devDependencies": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jayjaybeeuk/ramlizer.git"

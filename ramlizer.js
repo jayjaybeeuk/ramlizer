@@ -21,6 +21,7 @@ const finalhandler = require("finalhandler");
 const morgan = require("morgan");
 const bodyParser = require("body-parser");
 const Negotiator = require("negotiator");
+const cors = require("cors");
 
 spinner.succeed();
 spinner.start("Loading RAML");
@@ -30,6 +31,9 @@ const plannedMethodExampleNames = {};
 
 // Set up app
 const app = osprey.Router();
+
+// Set CORS
+app.use(cors());
 
 function mockHandler(handledRoute) {
   return (req, res) => {
