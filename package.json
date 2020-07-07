@@ -1,6 +1,6 @@
 {
   "name": "ramlizerjs",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A strategizer for RAML",
   "main": "ramlizer.js",
   "bin": {
