@@ -79,9 +79,6 @@ function mockHandler(handledRoute) {
       });
     }
 
-    res.setHeader("Content-Type", "application/json");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-
     res.write(JSON.stringify(response));
     res.end();
   };
