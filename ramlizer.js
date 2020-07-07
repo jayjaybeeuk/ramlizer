@@ -52,7 +52,7 @@ function mockHandler(handledRoute) {
     const body = bodies[type];
     const { properties } = body;
 
-    const response = {};
+    let response = {};
 
     if (body.examples) {
       const plannedExampleName =
@@ -67,6 +67,8 @@ function mockHandler(handledRoute) {
       }
 
       Object.assign(response, plannedExample.structuredValue);
+    } else if (body.example) {
+      response = body.example;
     } else {
       _.each(properties, property => {
         response[property.name] = "";
