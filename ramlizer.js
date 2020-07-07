@@ -174,24 +174,27 @@ function fillStrategies(api) {
 
         // Set defaults to be 200 response code and first example
         const selectedCode = response.code().value();
-        const selectedExample = body.examples && body.examples[0].name;
+        const selectedExample =
+          body.examples && body.examples[0] ? body.examples[0].name : "none";
 
-        // Loop through examples
-        _.each(body.examples, example => {
-          spinner.succeed(
-            `${resource.completeRelativeUri()}:${method.method()}:${response
-              .code()
-              .value()} contains an example named '${example.name}'`
-          );
+        plannedMethodResponseCodes[
+          `${method.method()}:${resource.completeRelativeUri()}`
+        ] = selectedCode;
 
-          plannedMethodResponseCodes[
-            `${method.method()}:${resource.completeRelativeUri()}`
-          ] = selectedCode;
+        plannedMethodExampleNames[
+          `${method.method()}:${resource.completeRelativeUri()}`
+        ] = selectedExample;
 
-          plannedMethodExampleNames[
-            `${method.method()}:${resource.completeRelativeUri()}`
-          ] = selectedExample;
-        });
+        if (body.examples) {
+          // Loop through examples
+          _.each(body.examples, example => {
+            spinner.succeed(
+              `${resource.completeRelativeUri()}:${method.method()}:${response
+                .code()
+                .value()} contains an example named '${example.name}'`
+            );
+          });
+        }
       });
     });
   });
