@@ -12,8 +12,9 @@ const _ = require("lodash");
 const ora = require("ora");
 
 const spinner = ora("Launching").start();
-
 const http = require("http");
+const socket = require("socket.io");
+const express = require("express");
 const ramlParser = require("raml-1-parser");
 const osprey = require("osprey");
 const resources = require("osprey-resources");
@@ -28,6 +29,7 @@ spinner.start("Loading RAML");
 
 const plannedMethodResponseCodes = {};
 const plannedMethodExampleNames = {};
+const allResources = [];
 
 // Set up app
 const app = osprey.Router();
@@ -35,32 +37,75 @@ const app = osprey.Router();
 // Set CORS
 app.use(cors());
 
+// socket server
+const appex = express();
+const server = appex.listen(3200, function () {
+  spinner.succeed(`Socket Server Listening on port ${3200}`);
+});
+// Socket setup
+const io = socket(server);
+
+let sequenceNumberByClient = new Map();
+// event fired every time a new client connects:
+io.on("connection", (socket) => {
+  io.emit("server:info",
+    `Client connected [id=${socket.id}]`
+  );
+  console.info(`Client connected [id=${socket.id}]`);
+  // initialize this client's sequence number
+  sequenceNumberByClient.set(socket, 1);
+
+  // when socket disconnects, remove it from the list:
+  socket.on("disconnect", () => {
+    sequenceNumberByClient.delete(socket);
+    io.emit("server:info",
+      `Client disconnected [id=${socket.id}]`
+    );
+    console.info(`Client gone [id=${socket.id}]`);
+  });
+});
+
 function mockHandler(handledRoute) {
   return (req, res) => {
     const { method } = handledRoute;
     const negotiator = new Negotiator(req);
     const route = req.route.path;
 
+    io.emit("server:info",
+      'received ' + method
+    );
+
     const plannedMethodResponseCode =
       plannedMethodResponseCodes[`${method}:${route}`];
 
     const plannedResponse = handledRoute.responses[plannedMethodResponseCode];
+    //console.log('plannedMethodResponseCode', plannedMethodResponseCode);
+    //console.log('plannedResponse 1', plannedResponse);
+    //console.log('plannedResponse 2', plannedResponse.body);
+    //console.log('plannedMethodExampleNames 2', plannedMethodExampleNames);
+    //console.log('plannedResponse 3', plannedResponse.body.type);
 
     const bodies = plannedResponse.body;
     const types = Object.keys(bodies);
     const type = negotiator.mediaType(types);
     const body = bodies[type];
     const { properties } = body;
-
+    //console.log('plannedResponse 3', body);
     let response = {};
 
     if (body.examples) {
       const plannedExampleName =
         plannedMethodExampleNames[`${method}:${route}`];
-
+      //console.log('plannedExampleName1', plannedExampleName);
       let plannedExample = body.examples.find(example => {
+        //console.log('example', example.name);
+        //console.log('plannedExampleName2', plannedExampleName);
+
         return example.name === plannedExampleName;
       });
+
+      //console.log('plannedMethodExampleNames 3', plannedMethodExampleNames);
+      //console.log('planned example ==== ', plannedExample);
 
       if (!plannedExample) {
         plannedExample = _.sample(body.examples);
@@ -79,8 +124,22 @@ function mockHandler(handledRoute) {
       });
     }
 
-    res.write(JSON.stringify(response));
-    res.end();
+    res.statusCode = plannedResponse.code;
+    //console.log('plannedResponse.code', plannedResponse.code)
+    io.emit("server:info",
+      route + ' ' + method.toUpperCase() + ' ' + JSON.stringify(response)
+    );
+    let item = {};
+    item.url = route;
+    item.code = plannedResponse.code;
+    item.method = method.toUpperCase();
+    io.emit("server:route",
+      item
+    );
+    setTimeout(function () {
+      res.write(JSON.stringify(response));
+      res.end();
+    }, 1);
   };
 }
 
@@ -94,6 +153,13 @@ function scenarioConfigurator(req, res) {
     route
   };
 
+  io.emit("server:info",
+    'received ' + method
+  );
+
+  //console.log('route', Object.values(route)[0])
+  //console.log('nextExampleName ', nextExampleName)
+
   if (nextResponseCode) {
     const oldResponseCode =
       plannedMethodResponseCodes[`${method}:${route}`] || "none";
@@ -105,17 +171,20 @@ function scenarioConfigurator(req, res) {
 
   if (nextExampleName) {
     const oldExampleName =
-      plannedMethodExampleNames[`${method}:${route}`] || "none";
-    plannedMethodExampleNames[`${method}:${route}`] = nextExampleName;
+      plannedMethodExampleNames[`${method}:${Object.values(route)[0]}`] || "none";
+    plannedMethodExampleNames[`${method}:${Object.values(route)[0]}`] = Object.values(nextExampleName)[0];
 
-    response.nextExampleName = nextExampleName;
+    //console.log('nextExampleName> ', Object.values(nextExampleName)[0]);
+
+    response.nextExampleName = Object.values(nextExampleName)[0];
     response.oldExampleName = oldExampleName;
   }
 
+  io.emit("server:info",
+    JSON.stringify(response)
+  );
   res.statusCode = 200;
-
   res.write(JSON.stringify(response));
-
   res.end();
 }
 
@@ -129,12 +198,20 @@ function fillStrategies(api) {
     }
 
     resource.methods().forEach(method => {
+      let item = {};
+
       spinner.succeed(
+        `${resource.completeRelativeUri()} has method ${method.method()}`
+      );
+      io.emit("server:info",
         `${resource.completeRelativeUri()} has method ${method.method()}`
       );
 
       if (method.responses().length === 0) {
         spinner.warn(
+          `${resource.completeRelativeUri()}:${method.method()} has no responses, skipping`
+        );
+        io.emit("server:info",
           `${resource.completeRelativeUri()}:${method.method()} has no responses, skipping`
         );
         return;
@@ -146,6 +223,19 @@ function fillStrategies(api) {
             .code()
             .value()}' response code`
         );
+        io.emit("server:info",
+          `${resource.completeRelativeUri()}:${method.method()} will produce a '${response
+            .code()
+            .value()}' response code`
+        );
+
+
+        // update allResources
+        item.method = method.method();
+        item.url = resource.completeRelativeUri();
+        item.code = response.code().value();
+
+        //console.log('allResources ', allResources);
 
         const bodies = response.toJSON().body;
 
@@ -153,11 +243,17 @@ function fillStrategies(api) {
           spinner.warn(
             `${resource.completeRelativeUri()}:${method.method()} has no body, skipping`
           );
+          io.emit("server:info",
+            `${resource.completeRelativeUri()}:${method.method()} has no body, skipping`
+          );
           return;
         }
 
         if (_.size(bodies) > 1) {
           spinner.warn(
+            `${resource.completeRelativeUri()}:${method.method()} has multiple body types, picking the first`
+          );
+          io.emit("server:info",
             `${resource.completeRelativeUri()}:${method.method()} has multiple body types, picking the first`
           );
         }
@@ -170,12 +266,17 @@ function fillStrategies(api) {
               .code()
               .value()} has no examples, skipping`
           );
+          io.emit("server:info",
+            `${resource.completeRelativeUri()}:${method.method()}:${response
+              .code()
+              .value()} has no examples, skipping`);
         }
 
         // Set defaults to be 200 response code and first example
+        let examples = [];
         const selectedCode = response.code().value();
         const selectedExample =
-          body.examples && body.examples[0] ? body.examples[0].name : "none";
+          body.examples && body.examples[0] ? body.examples[0].name : "none";// hardcode to first
 
         plannedMethodResponseCodes[
           `${method.method()}:${resource.completeRelativeUri()}`
@@ -185,6 +286,8 @@ function fillStrategies(api) {
           `${method.method()}:${resource.completeRelativeUri()}`
         ] = selectedExample;
 
+        //console.log('plannedMethodExampleNames', plannedMethodExampleNames);
+
         if (body.examples) {
           // Loop through examples
           _.each(body.examples, example => {
@@ -193,11 +296,27 @@ function fillStrategies(api) {
                 .code()
                 .value()} contains an example named '${example.name}'`
             );
+            io.emit("server:info",
+              `${resource.completeRelativeUri()}:${method.method()}:${response
+                .code()
+                .value()} contains an example named '${example.name}'`);
+            examples.push(example.name);
           });
         }
+        item.examples = examples;
+        allResources.push(item);
       });
     });
   });
+}
+
+// output all resources to an array
+function resourcesObj(req, res) {
+  io.emit('server:api', JSON.stringify(allResources))
+
+  res.statusCode = 200;
+  res.write(JSON.stringify(allResources));
+  res.end();
 }
 
 function startServer(argv) {
@@ -206,7 +325,10 @@ function startServer(argv) {
 
   app.use(morgan("combined"));
   app.use(bodyParser.json());
+  app.put(`/${endpoint}`, scenarioConfigurator);
   app.post(`/${endpoint}`, scenarioConfigurator);
+  app.patch(`/${endpoint}`, scenarioConfigurator);
+  app.post('/api/toObj', resourcesObj);
 
   spinner.succeed();
   spinner.start(
