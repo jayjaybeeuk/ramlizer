@@ -13,7 +13,7 @@ const ora = require("ora");
 
 const spinner = ora("Launching").start();
 
-const http = require("http");
+const http = require("node:http");
 const ramlParser = require("raml-1-parser");
 const osprey = require("osprey");
 const resources = require("osprey-resources");
@@ -120,15 +120,15 @@ function scenarioConfigurator(req, res) {
 }
 
 function fillStrategies(api) {
-  api.allResources().forEach(resource => {
+  for (const resource of api.allResources()) {
     if (resource.methods().length === 0) {
       spinner.info(
         `${resource.completeRelativeUri()} has no methods, skipping`
       );
-      return;
+      continue;
     }
 
-    resource.methods().forEach(method => {
+    for (const method of resource.methods()) {
       spinner.succeed(
         `${resource.completeRelativeUri()} has method ${method.method()}`
       );
@@ -137,10 +137,10 @@ function fillStrategies(api) {
         spinner.warn(
           `${resource.completeRelativeUri()}:${method.method()} has no responses, skipping`
         );
-        return;
+        continue;
       }
 
-      method.responses().forEach(response => {
+      for (const response of method.responses()) {
         spinner.succeed(
           `${resource.completeRelativeUri()}:${method.method()} will produce a '${response
             .code()
@@ -153,7 +153,7 @@ function fillStrategies(api) {
           spinner.warn(
             `${resource.completeRelativeUri()}:${method.method()} has no body, skipping`
           );
-          return;
+          continue;
         }
 
         if (_.size(bodies) > 1) {
@@ -175,7 +175,7 @@ function fillStrategies(api) {
         // Set defaults to be 200 response code and first example
         const selectedCode = response.code().value();
         const selectedExample =
-          body.examples && body.examples[0] ? body.examples[0].name : "none";
+          body.examples?.[0] ? body.examples[0].name : "none";
 
         plannedMethodResponseCodes[
           `${method.method()}:${resource.completeRelativeUri()}`
@@ -187,22 +187,22 @@ function fillStrategies(api) {
 
         if (body.examples) {
           // Loop through examples
-          _.each(body.examples, example => {
+          for (const example of body.examples) {
             spinner.succeed(
               `${resource.completeRelativeUri()}:${method.method()}:${response
                 .code()
                 .value()} contains an example named '${example.name}'`
             );
-          });
+          }
         }
-      });
-    });
-  });
+      }
+    }
+  }
 }
 
 function startServer(argv) {
-  const port = argv.port ? argv.port : 8080,
-    endpoint = argv.endpoint ? argv.endpoint : "ramlizer";
+  const port = argv.port ? argv.port : 8080;
+  const endpoint = argv.endpoint ? argv.endpoint : "ramlizer";
 
   app.use(morgan("combined"));
   app.use(bodyParser.json());
@@ -261,18 +261,18 @@ function parseRAML(file) {
 }
 
 const ramlFolder = String(argv.folder);
-const fs = require("fs");
+const fs = require("node:fs");
 
 startServer(argv);
 
-fs.readdir(argv.folder, function (err, files) {
+fs.readdir(argv.folder, (err, files) => {
   const ramlFiles = files.filter(el => /\.raml$/.test(el));
 
-  ramlFiles.forEach(file => {
+  for (const file of ramlFiles) {
     parseRAML(ramlFolder + file);
-  });
+  }
 
-  setTimeout(function () {
+  setTimeout(() => {
     portListener(argv);
   }, 4000);
 });

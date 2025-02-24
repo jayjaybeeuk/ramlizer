@@ -25,7 +25,7 @@
     "ora": "^2.1.0",
     "osprey": "^0.6.1",
     "osprey-resources": "^0.8.0",
-    "raml-1-parser": "^1.1.66",
+    "raml-1-parser": "^1.1.67",
     "yargs": "^11.0.0"
   },
   "repository": {
