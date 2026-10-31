@@ -1,27 +1,43 @@
 #!/usr/bin/env node
-const { argv } = require("yargs")
+import { readdir } from "node:fs/promises";
+import http from "node:http";
+import path from "node:path";
+
+import bodyParser from "body-parser";
+import cors from "cors";
+import finalhandler from "finalhandler";
+import _ from "lodash";
+import morgan from "morgan";
+import Negotiator from "negotiator";
+import ora from "ora";
+import osprey from "osprey";
+import ramlParser from "raml-1-parser";
+import yargs from "yargs";
+import { hideBin } from "yargs/helpers";
+
+const argv = yargs(hideBin(process.argv))
   .option("folder", {
     alias: "f",
     describe: "path to the raml files to mock",
     requiresArg: true,
     type: "string"
   })
-  .demandOption("folder");
-
-const _ = require("lodash");
-const ora = require("ora");
+  .option("port", {
+    alias: "p",
+    describe: "port to listen on",
+    requiresArg: true,
+    type: "number"
+  })
+  .option("endpoint", {
+    alias: "e",
+    describe: "endpoint used to configure the mock responses",
+    requiresArg: true,
+    type: "string"
+  })
+  .demandOption("folder")
+  .parse();
 
 const spinner = ora("Launching").start();
-
-const http = require("node:http");
-const ramlParser = require("raml-1-parser");
-const osprey = require("osprey");
-const resources = require("osprey-resources");
-const finalhandler = require("finalhandler");
-const morgan = require("morgan");
-const bodyParser = require("body-parser");
-const Negotiator = require("negotiator");
-const cors = require("cors");
 
 spinner.succeed();
 spinner.start("Loading RAML");
@@ -35,16 +51,16 @@ const app = osprey.Router();
 // Set CORS
 app.use(cors());
 
-function mockHandler(handledRoute) {
+function mockHandler(handledMethod) {
   return (req, res) => {
-    const { method } = handledRoute;
+    const { method } = handledMethod;
     const negotiator = new Negotiator(req);
     const route = req.route.path;
 
     const plannedMethodResponseCode =
       plannedMethodResponseCodes[`${method}:${route}`];
 
-    const plannedResponse = handledRoute.responses[plannedMethodResponseCode];
+    const plannedResponse = handledMethod.responses[plannedMethodResponseCode];
 
     const bodies = plannedResponse.body;
     const types = Object.keys(bodies);
@@ -84,8 +100,33 @@ function mockHandler(handledRoute) {
   };
 }
 
+/**
+ * Register every method of every (nested) RAML resource on the router.
+ *
+ * `osprey-resources` 1.0.0 moved to the AML model, so the equivalent
+ * routing for the JSON produced by `raml-1-parser` lives here instead.
+ */
+function addResources(router, resources, handler, prefix = "") {
+  for (const resource of resources || []) {
+    const route = prefix + (resource.relativeUri || "");
+
+    for (const method of resource.methods || []) {
+      const handle = handler(method, route);
+
+      // Enables the ability to skip a handler by returning null.
+      if (handle) {
+        router[method.method](route, handle);
+      }
+    }
+
+    addResources(router, resource.resources, handler, route);
+  }
+
+  return router;
+}
+
 function mockServer(raml) {
-  return resources(raml.resources, mockHandler);
+  return addResources(osprey.Router(), raml.resources, mockHandler);
 }
 
 function scenarioConfigurator(req, res) {
@@ -174,8 +215,9 @@ function fillStrategies(api) {
 
         // Set defaults to be 200 response code and first example
         const selectedCode = response.code().value();
-        const selectedExample =
-          body.examples?.[0] ? body.examples[0].name : "none";
+        const selectedExample = body.examples?.[0]
+          ? body.examples[0].name
+          : "none";
 
         plannedMethodResponseCodes[
           `${method.method()}:${resource.completeRelativeUri()}`
@@ -237,42 +279,42 @@ function portListener(argv) {
   });
 }
 
-function parseRAML(file) {
-  ramlParser
-    .loadApi(file)
-    .then(api => {
-      spinner.succeed();
+async function parseRAML(file) {
+  try {
+    const api = await ramlParser.loadApi(file);
 
-      spinner.start("Filling strategy queues");
+    spinner.succeed();
+    spinner.start("Filling strategy queues");
 
-      fillStrategies(api);
+    fillStrategies(api);
 
-      // Apply RAML strategies to server
-      applyRAML(
-        api.expand(true).toJSON({
-          serializeMetadata: false
-        }),
-        file
-      );
-    })
-    .catch(err => {
-      console.log(err);
-    });
+    // Apply RAML strategies to server
+    applyRAML(
+      api.expand(true).toJSON({
+        serializeMetadata: false
+      }),
+      file
+    );
+  } catch (err) {
+    spinner.fail(`Unable to parse ${file}`);
+    console.log(err);
+  }
 }
-
-const ramlFolder = String(argv.folder);
-const fs = require("node:fs");
 
 startServer(argv);
 
-fs.readdir(argv.folder, (err, files) => {
-  const ramlFiles = files.filter(el => /\.raml$/.test(el));
+try {
+  const ramlFolder = String(argv.folder);
+  const files = await readdir(ramlFolder);
+  const ramlFiles = files.filter(file => /\.raml$/.test(file));
 
-  for (const file of ramlFiles) {
-    parseRAML(ramlFolder + file);
-  }
+  await Promise.all(
+    ramlFiles.map(file => parseRAML(path.join(ramlFolder, file)))
+  );
 
-  setTimeout(() => {
-    portListener(argv);
-  }, 4000);
-});
+  portListener(argv);
+} catch (err) {
+  spinner.fail(`Unable to read RAML files from ${argv.folder}`);
+  console.log(err);
+  process.exitCode = 1;
+}

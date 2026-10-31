@@ -97,3 +97,22 @@ This option sets the port Ramlizer will use. By default this is '8080'.
 _--endpoint_
 
 This option sets the endpoint Ramlizer will use for its endpoint. By default this is 'ramlizer'.
+
+## Requirements
+
+Ramlizer requires Node.js 22.12 or newer.
+
+## Development
+
+Install the dependencies and run the example API:
+
+```sh
+npm install
+npm run example
+```
+
+Run the test suite:
+
+```sh
+npm test
+```
