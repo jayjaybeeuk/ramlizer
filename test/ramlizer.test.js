@@ -132,6 +132,13 @@ test("routes RAML resources with uri parameters", async () => {
   assert.deepEqual(body, { id: "" });
 });
 
+test("routes nested RAML resources", async () => {
+  const { response, body } = await mock("GET", "/users/42/posts");
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body, { postId: "" });
+});
+
 test("returns 404 for routes that are not in the RAML", async () => {
   const response = await fetch(`http://localhost:${port}/unknown`);
 
