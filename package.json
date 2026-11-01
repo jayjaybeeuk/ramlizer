@@ -7,6 +7,7 @@
     "ramlizer": "ramlizer.js"
   },
   "scripts": {
+    "test": "node --test",
     "example": "node ./ramlizer.js --folder ./example_raml/ --port 8080",
     "exampleDebug": "node --inspect-brk ./ramlizer.js --folder ./example_raml/ --port 8080"
   },

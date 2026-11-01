@@ -2,29 +2,9 @@
 const yargs = require("yargs");
 const { hideBin } = require("yargs/helpers");
 
-const argv = yargs(hideBin(process.argv))
-  .option("folder", {
-    alias: "f",
-    describe: "path to the raml files to mock",
-    requiresArg: true,
-    type: "string"
-  })
-  .option("port", {
-    describe: "port to use",
-    type: "number"
-  })
-  .option("endpoint", {
-    describe: "endpoint for scenario configuration",
-    type: "string"
-  })
-  .demandOption("folder")
-  .parseSync();
-
 const _ = require("lodash");
 const oraModule = require("ora");
 const ora = oraModule.default || oraModule;
-
-const spinner = ora("Launching").start();
 
 const http = require("node:http");
 const path = require("node:path");
@@ -37,77 +17,6 @@ const morgan = require("morgan");
 const bodyParser = require("body-parser");
 const Negotiator = require("negotiator");
 const cors = require("cors");
-
-spinner.succeed();
-spinner.start("Loading RAML");
-
-const plannedMethodResponseCodes = {};
-const plannedMethodExampleNames = {};
-
-// Set up app
-const app = osprey.Router();
-
-// Set CORS
-app.use(cors());
-
-function mockHandler(handledRoute) {
-  return (req, res) => {
-    const rawMethod = handledRoute.method;
-    const method =
-      typeof rawMethod === "function"
-        ? rawMethod()
-        : rawMethod?.value
-          ? rawMethod.value()
-          : rawMethod;
-    const negotiator = new Negotiator(req);
-    const route = req.route ? req.route.path : req.url;
-
-    const plannedMethodResponseCode =
-      plannedMethodResponseCodes[`${method}:${route}`];
-
-    const plannedResponse = handledRoute.responses[plannedMethodResponseCode];
-
-    const bodies = plannedResponse.body;
-    const types = Object.keys(bodies);
-    const type = negotiator.mediaType(types);
-    const body = bodies[type];
-    const { properties } = body;
-
-    let response = {};
-
-    if (body.examples) {
-      const plannedExampleName =
-        plannedMethodExampleNames[`${method}:${route}`];
-
-      let plannedExample = body.examples.find(example => {
-        return example.name === plannedExampleName;
-      });
-
-      if (!plannedExample) {
-        plannedExample = _.sample(body.examples);
-      }
-
-      Object.assign(response, plannedExample.structuredValue);
-    } else if (body.example) {
-      response = body.example;
-    } else {
-      _.each(properties, property => {
-        response[property.name] = "";
-
-        if (property.enum) {
-          response[property.name] = _.sample(property.enum);
-        }
-      });
-    }
-
-    res.statusCode = Number(plannedMethodResponseCode) || 200;
-    if (type) {
-      res.setHeader("Content-Type", type);
-    }
-    res.write(JSON.stringify(response));
-    res.end();
-  };
-}
 
 function ramlResourcesToEndpoints(resList, prefix = "") {
   let endpoints = [];
@@ -137,198 +46,313 @@ function ramlResourcesToEndpoints(resList, prefix = "") {
   return endpoints;
 }
 
-function mockServer(raml) {
-  const endpoints = ramlResourcesToEndpoints(raml.resources);
-  return resources(endpoints, mockHandler);
-}
+function createRamlizer(options = {}) {
+  const silent = Boolean(options.silent);
+  const spinner = silent
+    ? {
+        start: () => spinner,
+        succeed: () => spinner,
+        warn: () => spinner,
+        info: () => spinner,
+        fail: () => spinner
+      }
+    : ora("Launching").start();
 
-function scenarioConfigurator(req, res) {
-  const { method, nextExampleName, nextResponseCode, route } = req.body;
-  const response = {
-    route
-  };
+  const plannedMethodResponseCodes = {};
+  const plannedMethodExampleNames = {};
 
-  if (nextResponseCode) {
-    const oldResponseCode =
-      plannedMethodResponseCodes[`${method}:${route}`] || "none";
-    plannedMethodResponseCodes[`${method}:${route}`] = nextResponseCode;
+  const app = osprey.Router();
+  app.use(cors());
 
-    response.nextResponseCode = nextResponseCode;
-    response.oldResponseCode = oldResponseCode;
+  function mockHandler(handledRoute) {
+    return (req, res) => {
+      const rawMethod = handledRoute.method;
+      const method =
+        typeof rawMethod === "function"
+          ? rawMethod()
+          : rawMethod?.value
+            ? rawMethod.value()
+            : rawMethod;
+      const negotiator = new Negotiator(req);
+      const route = req.route ? req.route.path : req.url;
+
+      const plannedMethodResponseCode =
+        plannedMethodResponseCodes[`${method}:${route}`];
+
+      const plannedResponse = handledRoute.responses[plannedMethodResponseCode];
+
+      const bodies = plannedResponse.body;
+      const types = Object.keys(bodies);
+      const type = negotiator.mediaType(types);
+      const body = bodies[type];
+      const { properties } = body;
+
+      let response = {};
+
+      if (body.examples) {
+        const plannedExampleName =
+          plannedMethodExampleNames[`${method}:${route}`];
+
+        let plannedExample = body.examples.find(example => {
+          return example.name === plannedExampleName;
+        });
+
+        if (!plannedExample) {
+          plannedExample = _.sample(body.examples);
+        }
+
+        Object.assign(response, plannedExample.structuredValue);
+      } else if (body.example) {
+        response = body.example;
+      } else {
+        _.each(properties, property => {
+          response[property.name] = "";
+
+          if (property.enum) {
+            response[property.name] = _.sample(property.enum);
+          }
+        });
+      }
+
+      res.statusCode = Number(plannedMethodResponseCode) || 200;
+      if (type) {
+        res.setHeader("Content-Type", type);
+      }
+      res.write(JSON.stringify(response));
+      res.end();
+    };
   }
 
-  if (nextExampleName) {
-    const oldExampleName =
-      plannedMethodExampleNames[`${method}:${route}`] || "none";
-    plannedMethodExampleNames[`${method}:${route}`] = nextExampleName;
-
-    response.nextExampleName = nextExampleName;
-    response.oldExampleName = oldExampleName;
+  function mockServer(raml) {
+    const endpoints = ramlResourcesToEndpoints(raml.resources);
+    return resources(endpoints, mockHandler);
   }
 
-  res.statusCode = 200;
+  function scenarioConfigurator(req, res) {
+    const { method, nextExampleName, nextResponseCode, route } = req.body;
+    const response = {
+      route
+    };
 
-  res.write(JSON.stringify(response));
+    if (nextResponseCode) {
+      const oldResponseCode =
+        plannedMethodResponseCodes[`${method}:${route}`] || "none";
+      plannedMethodResponseCodes[`${method}:${route}`] = nextResponseCode;
 
-  res.end();
-}
-
-function fillStrategies(api) {
-  for (const resource of api.allResources()) {
-    if (resource.methods().length === 0) {
-      spinner.info(
-        `${resource.completeRelativeUri()} has no methods, skipping`
-      );
-      continue;
+      response.nextResponseCode = nextResponseCode;
+      response.oldResponseCode = oldResponseCode;
     }
 
-    for (const method of resource.methods()) {
-      spinner.succeed(
-        `${resource.completeRelativeUri()} has method ${method.method()}`
-      );
+    if (nextExampleName) {
+      const oldExampleName =
+        plannedMethodExampleNames[`${method}:${route}`] || "none";
+      plannedMethodExampleNames[`${method}:${route}`] = nextExampleName;
 
-      if (method.responses().length === 0) {
-        spinner.warn(
-          `${resource.completeRelativeUri()}:${method.method()} has no responses, skipping`
+      response.nextExampleName = nextExampleName;
+      response.oldExampleName = oldExampleName;
+    }
+
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.write(JSON.stringify(response));
+    res.end();
+  }
+
+  function fillStrategies(api) {
+    for (const resource of api.allResources()) {
+      if (resource.methods().length === 0) {
+        spinner.info(
+          `${resource.completeRelativeUri()} has no methods, skipping`
         );
         continue;
       }
 
-      for (const response of method.responses()) {
+      for (const method of resource.methods()) {
         spinner.succeed(
-          `${resource.completeRelativeUri()}:${method.method()} will produce a '${response
-            .code()
-            .value()}' response code`
+          `${resource.completeRelativeUri()} has method ${method.method()}`
         );
 
-        const bodies = response.toJSON().body;
-
-        if (!bodies) {
+        if (method.responses().length === 0) {
           spinner.warn(
-            `${resource.completeRelativeUri()}:${method.method()} has no body, skipping`
+            `${resource.completeRelativeUri()}:${method.method()} has no responses, skipping`
           );
           continue;
         }
 
-        if (_.size(bodies) > 1) {
-          spinner.warn(
-            `${resource.completeRelativeUri()}:${method.method()} has multiple body types, picking the first`
-          );
-        }
-
-        const body = bodies[Object.keys(bodies)[0]];
-
-        if (!body.examples) {
-          spinner.warn(
-            `${resource.completeRelativeUri()}:${method.method()}:${response
+        for (const response of method.responses()) {
+          spinner.succeed(
+            `${resource.completeRelativeUri()}:${method.method()} will produce a '${response
               .code()
-              .value()} has no examples, skipping`
+              .value()}' response code`
           );
-        }
 
-        // Set defaults to be 200 response code and first example
-        const selectedCode = response.code().value();
-        const selectedExample = body.examples?.[0]
-          ? body.examples[0].name
-          : "none";
+          const bodies = response.toJSON().body;
 
-        const routeKey = `${method.method()}:${resource.completeRelativeUri()}`;
-        if (!plannedMethodResponseCodes[routeKey] || selectedCode === "200") {
-          plannedMethodResponseCodes[routeKey] = selectedCode;
-          plannedMethodExampleNames[routeKey] = selectedExample;
-        }
+          if (!bodies) {
+            spinner.warn(
+              `${resource.completeRelativeUri()}:${method.method()} has no body, skipping`
+            );
+            continue;
+          }
 
-        if (body.examples) {
-          // Loop through examples
-          for (const example of body.examples) {
-            spinner.succeed(
+          if (_.size(bodies) > 1) {
+            spinner.warn(
+              `${resource.completeRelativeUri()}:${method.method()} has multiple body types, picking the first`
+            );
+          }
+
+          const body = bodies[Object.keys(bodies)[0]];
+
+          if (!body.examples) {
+            spinner.warn(
               `${resource.completeRelativeUri()}:${method.method()}:${response
                 .code()
-                .value()} contains an example named '${example.name}'`
+                .value()} has no examples, skipping`
             );
+          }
+
+          // Set defaults to be 200 response code and first example
+          const selectedCode = response.code().value();
+          const selectedExample = body.examples?.[0]
+            ? body.examples[0].name
+            : "none";
+
+          const routeKey = `${method.method()}:${resource.completeRelativeUri()}`;
+          if (!plannedMethodResponseCodes[routeKey] || selectedCode === "200") {
+            plannedMethodResponseCodes[routeKey] = selectedCode;
+            plannedMethodExampleNames[routeKey] = selectedExample;
+          }
+
+          if (body.examples) {
+            // Loop through examples
+            for (const example of body.examples) {
+              spinner.succeed(
+                `${resource.completeRelativeUri()}:${method.method()}:${response
+                  .code()
+                  .value()} contains an example named '${example.name}'`
+              );
+            }
           }
         }
       }
     }
   }
-}
 
-function startServer(argv) {
-  const port = argv.port ? argv.port : 8080;
-  const endpoint = argv.endpoint ? argv.endpoint : "ramlizer";
+  function startServer(config = {}) {
+    const port = config.port ? config.port : 8080;
+    const endpoint = config.endpoint ? config.endpoint : "ramlizer";
 
-  app.use(morgan("combined"));
-  app.use(bodyParser.json());
-  app.post(`/${endpoint}`, scenarioConfigurator);
+    if (!silent) {
+      app.use(morgan("combined"));
+    }
+    app.use(bodyParser.json());
+    app.post(`/${endpoint}`, scenarioConfigurator);
 
-  spinner.succeed();
-  spinner.start(
-    `Listening for configuration requests on http://localhost:${port}/${endpoint}`
-  );
-}
-
-function applyRAML(raml, file) {
-  // Start servers
-  spinner.succeed();
-  spinner.start(`Creating HTTP mock services for ${file}`);
-
-  app.use(mockServer(raml));
-  app.use(osprey.errorHandler());
-}
-
-function portListener(argv) {
-  spinner.succeed();
-  spinner.start("Launching HTTP server");
-  const server = http.createServer((req, res) => {
-    app(req, res, finalhandler(req, res));
-  });
-  const port = argv.port ? argv.port : 8080;
-
-  server.listen(port, () => {
     spinner.succeed();
-    spinner.info(`Listening on http://localhost:${port}`);
+    spinner.start(
+      `Listening for configuration requests on http://localhost:${port}/${endpoint}`
+    );
+  }
+
+  function applyRAML(raml, file) {
+    spinner.succeed();
+    spinner.start(`Creating HTTP mock services for ${file}`);
+
+    app.use(mockServer(raml));
+    app.use(osprey.errorHandler());
+  }
+
+  function parseRAML(file) {
+    return ramlParser
+      .loadApi(file)
+      .then(api => {
+        spinner.succeed();
+        spinner.start("Filling strategy queues");
+        fillStrategies(api);
+        applyRAML(
+          api.expand(true).toJSON({
+            serializeMetadata: false
+          }),
+          file
+        );
+      })
+      .catch(err => {
+        console.error(err);
+        throw err;
+      });
+  }
+
+  async function loadFolder(folderPath) {
+    const files = await fs.promises.readdir(folderPath);
+    const ramlFiles = files.filter(el => /\.raml$/.test(el));
+    for (const file of ramlFiles) {
+      await parseRAML(path.join(folderPath, file));
+    }
+  }
+
+  function listen(port) {
+    return new Promise((resolve, reject) => {
+      spinner.succeed();
+      spinner.start("Launching HTTP server");
+      const server = http.createServer((req, res) => {
+        app(req, res, finalhandler(req, res));
+      });
+      server.listen(port, err => {
+        if (err) return reject(err);
+        spinner.succeed();
+        spinner.info(`Listening on http://localhost:${port}`);
+        resolve(server);
+      });
+    });
+  }
+
+  return {
+    app,
+    plannedMethodResponseCodes,
+    plannedMethodExampleNames,
+    startServer,
+    parseRAML,
+    loadFolder,
+    listen
+  };
+}
+
+async function startRamlizer(argv) {
+  const ramlizer = createRamlizer(argv);
+  const port = argv.port ? argv.port : 8080;
+  ramlizer.startServer(argv);
+  await ramlizer.loadFolder(argv.folder);
+  const server = await ramlizer.listen(port);
+  return { ...ramlizer, server };
+}
+
+if (require.main === module) {
+  const argv = yargs(hideBin(process.argv))
+    .option("folder", {
+      alias: "f",
+      describe: "path to the raml files to mock",
+      requiresArg: true,
+      type: "string"
+    })
+    .option("port", {
+      describe: "port to use",
+      type: "number"
+    })
+    .option("endpoint", {
+      describe: "endpoint for scenario configuration",
+      type: "string"
+    })
+    .demandOption("folder")
+    .parseSync();
+
+  startRamlizer(argv).catch(err => {
+    console.error(err);
+    process.exit(1);
   });
 }
 
-function parseRAML(file) {
-  ramlParser
-    .loadApi(file)
-    .then(api => {
-      spinner.succeed();
-
-      spinner.start("Filling strategy queues");
-
-      fillStrategies(api);
-
-      // Apply RAML strategies to server
-      applyRAML(
-        api.expand(true).toJSON({
-          serializeMetadata: false
-        }),
-        file
-      );
-    })
-    .catch(err => {
-      console.log(err);
-    });
-}
-
-const ramlFolder = String(argv.folder);
-
-startServer(argv);
-
-fs.readdir(argv.folder, (err, files) => {
-  if (err) {
-    spinner.fail(`Failed to read folder: ${argv.folder}`);
-    process.exit(1);
-  }
-  const ramlFiles = files.filter(el => /\.raml$/.test(el));
-
-  for (const file of ramlFiles) {
-    parseRAML(path.join(ramlFolder, file));
-  }
-
-  setTimeout(() => {
-    portListener(argv);
-  }, 4000);
-});
+module.exports = {
+  createRamlizer,
+  startRamlizer,
+  ramlResourcesToEndpoints
+};
