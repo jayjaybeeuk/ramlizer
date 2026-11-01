@@ -16,17 +16,17 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "body-parser": "^1.18.3",
-    "cors": "^2.8.5",
-    "finalhandler": "^1.1.1",
-    "lodash": "^4.17.15",
-    "morgan": "^1.10.0",
-    "negotiator": "^0.6.1",
-    "ora": "^2.1.0",
-    "osprey": "^0.6.1",
-    "osprey-resources": "^0.8.0",
+    "body-parser": "^2.4.0",
+    "cors": "^2.8.6",
+    "finalhandler": "^2.1.1",
+    "lodash": "^4.18.1",
+    "morgan": "^1.12.1",
+    "negotiator": "^1.1.0",
+    "ora": "^10.0.0",
+    "osprey": "^1.0.0",
+    "osprey-resources": "^1.0.0",
     "raml-1-parser": "^1.1.67",
-    "yargs": "^11.0.0"
+    "yargs": "^18.2.0"
   },
   "repository": {
     "type": "git",

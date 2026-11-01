@@ -1,19 +1,34 @@
 #!/usr/bin/env node
-const { argv } = require("yargs")
+const yargs = require("yargs");
+const { hideBin } = require("yargs/helpers");
+
+const argv = yargs(hideBin(process.argv))
   .option("folder", {
     alias: "f",
     describe: "path to the raml files to mock",
     requiresArg: true,
     type: "string"
   })
-  .demandOption("folder");
+  .option("port", {
+    describe: "port to use",
+    type: "number"
+  })
+  .option("endpoint", {
+    describe: "endpoint for scenario configuration",
+    type: "string"
+  })
+  .demandOption("folder")
+  .parseSync();
 
 const _ = require("lodash");
-const ora = require("ora");
+const oraModule = require("ora");
+const ora = oraModule.default || oraModule;
 
 const spinner = ora("Launching").start();
 
 const http = require("node:http");
+const path = require("node:path");
+const fs = require("node:fs");
 const ramlParser = require("raml-1-parser");
 const osprey = require("osprey");
 const resources = require("osprey-resources");
@@ -37,9 +52,15 @@ app.use(cors());
 
 function mockHandler(handledRoute) {
   return (req, res) => {
-    const { method } = handledRoute;
+    const rawMethod = handledRoute.method;
+    const method =
+      typeof rawMethod === "function"
+        ? rawMethod()
+        : rawMethod?.value
+          ? rawMethod.value()
+          : rawMethod;
     const negotiator = new Negotiator(req);
-    const route = req.route.path;
+    const route = req.route ? req.route.path : req.url;
 
     const plannedMethodResponseCode =
       plannedMethodResponseCodes[`${method}:${route}`];
@@ -79,13 +100,46 @@ function mockHandler(handledRoute) {
       });
     }
 
+    res.statusCode = Number(plannedMethodResponseCode) || 200;
+    if (type) {
+      res.setHeader("Content-Type", type);
+    }
     res.write(JSON.stringify(response));
     res.end();
   };
 }
 
+function ramlResourcesToEndpoints(resList, prefix = "") {
+  let endpoints = [];
+  for (const resource of resList || []) {
+    const fullPath = prefix + (resource.relativeUri || "");
+    if (resource.methods && resource.methods.length > 0) {
+      endpoints.push({
+        path: { value: () => fullPath },
+        parameters: resource.uriParameters || [],
+        operations: resource.methods.map(methodObj => {
+          let currentMethod = (methodObj.method || "get").toLowerCase();
+          const op = Object.create(methodObj);
+          op.method = { value: () => currentMethod };
+          op.withMethod = newMethod => {
+            currentMethod = newMethod;
+          };
+          return op;
+        })
+      });
+    }
+    if (resource.resources) {
+      endpoints = endpoints.concat(
+        ramlResourcesToEndpoints(resource.resources, fullPath)
+      );
+    }
+  }
+  return endpoints;
+}
+
 function mockServer(raml) {
-  return resources(raml.resources, mockHandler);
+  const endpoints = ramlResourcesToEndpoints(raml.resources);
+  return resources(endpoints, mockHandler);
 }
 
 function scenarioConfigurator(req, res) {
@@ -174,16 +228,15 @@ function fillStrategies(api) {
 
         // Set defaults to be 200 response code and first example
         const selectedCode = response.code().value();
-        const selectedExample =
-          body.examples?.[0] ? body.examples[0].name : "none";
+        const selectedExample = body.examples?.[0]
+          ? body.examples[0].name
+          : "none";
 
-        plannedMethodResponseCodes[
-          `${method.method()}:${resource.completeRelativeUri()}`
-        ] = selectedCode;
-
-        plannedMethodExampleNames[
-          `${method.method()}:${resource.completeRelativeUri()}`
-        ] = selectedExample;
+        const routeKey = `${method.method()}:${resource.completeRelativeUri()}`;
+        if (!plannedMethodResponseCodes[routeKey] || selectedCode === "200") {
+          plannedMethodResponseCodes[routeKey] = selectedCode;
+          plannedMethodExampleNames[routeKey] = selectedExample;
+        }
 
         if (body.examples) {
           // Loop through examples
@@ -261,15 +314,18 @@ function parseRAML(file) {
 }
 
 const ramlFolder = String(argv.folder);
-const fs = require("node:fs");
 
 startServer(argv);
 
 fs.readdir(argv.folder, (err, files) => {
+  if (err) {
+    spinner.fail(`Failed to read folder: ${argv.folder}`);
+    process.exit(1);
+  }
   const ramlFiles = files.filter(el => /\.raml$/.test(el));
 
   for (const file of ramlFiles) {
-    parseRAML(ramlFolder + file);
+    parseRAML(path.join(ramlFolder, file));
   }
 
   setTimeout(() => {
