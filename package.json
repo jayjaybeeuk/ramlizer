@@ -36,5 +36,10 @@
   "bugs": {
     "url": "https://github.com/jayjaybeeuk/ramlizer/issues"
   },
-  "homepage": "https://github.com/jayjaybeeuk/ramlizer#readme"
+  "homepage": "https://github.com/jayjaybeeuk/ramlizer#readme",
+  "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "semantic-release": "^25.0.9"
+  }
 }
