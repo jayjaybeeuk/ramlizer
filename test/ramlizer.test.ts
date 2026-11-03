@@ -1,15 +1,24 @@
-const { test, describe, before, after } = require("node:test");
-const assert = require("node:assert");
-const http = require("node:http");
-const path = require("node:path");
-const cp = require("node:child_process");
-const {
+import { test, describe, before, after } from "node:test";
+import assert from "node:assert";
+import http from "node:http";
+import path from "node:path";
+import cp from "node:child_process";
+import {
   createRamlizer,
-  startRamlizer,
-  ramlResourcesToEndpoints
-} = require("../ramlizer.js");
+  ramlResourcesToEndpoints,
+  type RamlizerInstance
+} from "../src/index";
 
-function request(options, body) {
+interface HttpResponse {
+  status: number | undefined;
+  data: any;
+  raw: string;
+}
+
+function request(
+  options: http.RequestOptions,
+  body?: any
+): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : "";
     const req = http.request(
@@ -26,7 +35,7 @@ function request(options, body) {
         let resData = "";
         res.on("data", chunk => (resData += chunk));
         res.on("end", () => {
-          let parsed;
+          let parsed: any;
           try {
             parsed = JSON.parse(resData);
           } catch {
@@ -115,8 +124,8 @@ describe("ramlResourcesToEndpoints", () => {
 });
 
 describe("ramlizer server integration", () => {
-  let ramlizer;
-  let server;
+  let ramlizer: RamlizerInstance;
+  let server: http.Server;
   const testPort = 8765;
   const exampleFolder = path.resolve(__dirname, "../example_raml");
 
@@ -127,11 +136,11 @@ describe("ramlizer server integration", () => {
     server = await ramlizer.listen(testPort);
   });
 
-  after(done => {
+  after(async () => {
     if (server) {
-      server.close(done);
-    } else {
-      done();
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => (err ? reject(err) : resolve()));
+      });
     }
   });
 
@@ -240,7 +249,7 @@ describe("ramlizer server integration", () => {
 describe("ramlizer CLI process execution", () => {
   const cliPort = 8766;
   const exampleFolder = path.resolve(__dirname, "../example_raml");
-  let child;
+  let child: cp.ChildProcess | undefined;
 
   after(() => {
     if (child && !child.killed) {
@@ -252,7 +261,7 @@ describe("ramlizer CLI process execution", () => {
     child = cp.spawn(
       process.execPath,
       [
-        path.resolve(__dirname, "../ramlizer.js"),
+        path.resolve(__dirname, "../dist/cli.js"),
         "--folder",
         exampleFolder,
         "--port",
@@ -261,12 +270,12 @@ describe("ramlizer CLI process execution", () => {
       { stdio: ["pipe", "pipe", "pipe"] }
     );
 
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("CLI process startup timed out"));
       }, 8000);
 
-      child.stderr.on("data", chunk => {
+      child?.stderr?.on("data", chunk => {
         if (
           chunk.toString().includes("Listening on http://localhost:" + cliPort)
         ) {
@@ -275,7 +284,7 @@ describe("ramlizer CLI process execution", () => {
         }
       });
 
-      child.on("error", err => {
+      child?.on("error", err => {
         clearTimeout(timeout);
         reject(err);
       });
