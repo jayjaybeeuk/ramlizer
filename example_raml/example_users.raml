@@ -1,0 +1,82 @@
+#%RAML 1.0
+title: Users and Products Example
+version: v1
+baseUri: https://example.com
+mediaType: application/json
+
+types:
+  BaseUser:
+    type: object
+    properties:
+      id: integer
+      email: string
+
+  AdminUser:
+    type: BaseUser
+    properties:
+      role:
+        type: string
+        enum: [superadmin, moderator]
+      active: boolean
+    example:
+      id: 1
+      email: admin@example.com
+      role: superadmin
+      active: true
+
+  CustomerUser:
+    type: BaseUser
+    properties:
+      tier:
+        type: string
+        enum: [gold, silver, bronze]
+    examples:
+      goldMember:
+        id: 101
+        email: gold@example.com
+        tier: gold
+      silverMember:
+        id: 102
+        email: silver@example.com
+        tier: silver
+
+  Product:
+    type: object
+    properties:
+      sku: string
+      stock: integer
+      inStock: boolean
+      category:
+        enum: [electronics, books, apparel]
+
+/admins:
+  get:
+    description: Returns an admin user inheriting from BaseUser with a single example
+    responses:
+      200:
+        body:
+          type: AdminUser
+
+/customers:
+  get:
+    description: Returns a customer user with multiple named examples (goldMember, silverMember)
+    responses:
+      200:
+        body:
+          type: CustomerUser
+
+/products:
+  get:
+    description: Returns a product with mock values synthesized from property types
+    responses:
+      200:
+        body:
+          type: Product
+
+/products/catalog:
+  get:
+    description: Returns an array of products
+    responses:
+      200:
+        body:
+          type: Product[]
