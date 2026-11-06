@@ -1,3 +1,11 @@
+# [1.3.0](https://github.com/jayjaybeeuk/ramlizer/compare/v1.2.0...v1.3.0) (2026-11-06)
+
+
+### Features
+
+* add example RAML files demonstrating RAML 1.0 data types and RAML 0.8 compatibility ([24ee476](https://github.com/jayjaybeeuk/ramlizer/commit/24ee476c1b5cefc53763268a5ff479108f254161))
+* support newer RAML specification versions, data types, and multiple example formats ([7646e67](https://github.com/jayjaybeeuk/ramlizer/commit/7646e674270822b2d456726d736ca7429fb879bf))
+
 # [1.2.0](https://github.com/jayjaybeeuk/ramlizer/compare/v1.1.2...v1.2.0) (2026-11-06)
 
 
