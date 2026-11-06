@@ -2,14 +2,31 @@
   "name": "ramlizerjs",
   "version": "1.1.2",
   "description": "A strategizer for RAML",
-  "main": "ramlizer.js",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
   "bin": {
-    "ramlizer": "ramlizer.js"
+    "ramlizer": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node --test",
-    "example": "node ./ramlizer.js --folder ./example_raml/ --port 8080",
-    "exampleDebug": "node --inspect-brk ./ramlizer.js --folder ./example_raml/ --port 8080"
+    "build": "rollup -c",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "tsx --test",
+    "prepare": "npm run build",
+    "example": "node ./dist/cli.js --folder ./example_raml/ --port 8080",
+    "exampleDebug": "node --inspect-brk ./dist/cli.js --folder ./example_raml/ --port 8080"
   },
   "author": "James Bolton <james@james-bolton.com>",
   "contributors": [
@@ -38,8 +55,22 @@
   },
   "homepage": "https://github.com/jayjaybeeuk/ramlizer#readme",
   "devDependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-typescript": "^12.3.1",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
-    "semantic-release": "^25.0.9"
+    "@types/body-parser": "^1.19.6",
+    "@types/cors": "^2.8.19",
+    "@types/finalhandler": "^1.2.4",
+    "@types/lodash": "^4.17.27",
+    "@types/morgan": "^1.9.10",
+    "@types/negotiator": "^0.6.5",
+    "@types/node": "^26.6.6",
+    "@types/yargs": "^17.0.35",
+    "rollup": "^4.67.4",
+    "semantic-release": "^25.0.9",
+    "tslib": "^2.9.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   }
 }

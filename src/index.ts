@@ -1,36 +1,49 @@
-#!/usr/bin/env node
-const yargs = require("yargs");
-const { hideBin } = require("yargs/helpers");
+import _ from "lodash";
+import oraModule from "ora";
+import http from "node:http";
+import path from "node:path";
+import fs from "node:fs";
+import * as ramlParser from "raml-1-parser";
+import osprey from "osprey";
+import resources from "osprey-resources";
+import finalhandler from "finalhandler";
+import morgan from "morgan";
+import bodyParser from "body-parser";
+import Negotiator from "negotiator";
+import cors from "cors";
 
-const _ = require("lodash");
-const oraModule = require("ora");
-const ora = oraModule.default || oraModule;
+import type {
+  Endpoint,
+  EndpointOperation,
+  RamlResource,
+  RamlizerOptions,
+  RamlizerServerConfig,
+  RamlizerInstance,
+  StartedRamlizer,
+  ScenarioConfigBody,
+  ScenarioConfigResponse
+} from "./types";
 
-const http = require("node:http");
-const path = require("node:path");
-const fs = require("node:fs");
-const ramlParser = require("raml-1-parser");
-const osprey = require("osprey");
-const resources = require("osprey-resources");
-const finalhandler = require("finalhandler");
-const morgan = require("morgan");
-const bodyParser = require("body-parser");
-const Negotiator = require("negotiator");
-const cors = require("cors");
+export * from "./types";
 
-function ramlResourcesToEndpoints(resList, prefix = "") {
-  let endpoints = [];
+const ora = (oraModule as any)?.default || oraModule;
+
+export function ramlResourcesToEndpoints(
+  resList?: RamlResource[] | null,
+  prefix = ""
+): Endpoint[] {
+  let endpoints: Endpoint[] = [];
   for (const resource of resList || []) {
     const fullPath = prefix + (resource.relativeUri || "");
     if (resource.methods && resource.methods.length > 0) {
       endpoints.push({
         path: { value: () => fullPath },
         parameters: resource.uriParameters || [],
-        operations: resource.methods.map(methodObj => {
+        operations: resource.methods.map((methodObj: any): EndpointOperation => {
           let currentMethod = (methodObj.method || "get").toLowerCase();
-          const op = Object.create(methodObj);
+          const op: EndpointOperation = Object.create(methodObj);
           op.method = { value: () => currentMethod };
-          op.withMethod = newMethod => {
+          op.withMethod = (newMethod: string) => {
             currentMethod = newMethod;
           };
           return op;
@@ -46,9 +59,9 @@ function ramlResourcesToEndpoints(resList, prefix = "") {
   return endpoints;
 }
 
-function createRamlizer(options = {}) {
+export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance {
   const silent = Boolean(options.silent);
-  const spinner = silent
+  const spinner: any = silent
     ? {
         start: () => spinner,
         succeed: () => spinner,
@@ -58,14 +71,14 @@ function createRamlizer(options = {}) {
       }
     : ora("Launching").start();
 
-  const plannedMethodResponseCodes = {};
-  const plannedMethodExampleNames = {};
+  const plannedMethodResponseCodes: Record<string, string> = {};
+  const plannedMethodExampleNames: Record<string, string> = {};
 
   const app = osprey.Router();
   app.use(cors());
 
-  function mockHandler(handledRoute) {
-    return (req, res) => {
+  function mockHandler(handledRoute: any) {
+    return (req: any, res: any) => {
       const rawMethod = handledRoute.method;
       const method =
         typeof rawMethod === "function"
@@ -79,21 +92,25 @@ function createRamlizer(options = {}) {
       const plannedMethodResponseCode =
         plannedMethodResponseCodes[`${method}:${route}`];
 
-      const plannedResponse = handledRoute.responses[plannedMethodResponseCode];
+      const plannedResponse =
+        (plannedMethodResponseCode && handledRoute.responses?.[plannedMethodResponseCode]) ||
+        handledRoute.responses?.[200] ||
+        (handledRoute.responses && Object.values(handledRoute.responses)[0]) ||
+        {};
 
-      const bodies = plannedResponse.body;
+      const bodies = plannedResponse?.body || {};
       const types = Object.keys(bodies);
       const type = negotiator.mediaType(types);
-      const body = bodies[type];
+      const body = (type ? bodies[type] : Object.values(bodies)[0]) || {};
       const { properties } = body;
 
-      let response = {};
+      let response: any = {};
 
       if (body.examples) {
         const plannedExampleName =
           plannedMethodExampleNames[`${method}:${route}`];
 
-        let plannedExample = body.examples.find(example => {
+        let plannedExample = body.examples.find((example: any) => {
           return example.name === plannedExampleName;
         });
 
@@ -105,7 +122,7 @@ function createRamlizer(options = {}) {
       } else if (body.example) {
         response = body.example;
       } else {
-        _.each(properties, property => {
+        _.each(properties, (property: any) => {
           response[property.name] = "";
 
           if (property.enum) {
@@ -123,14 +140,14 @@ function createRamlizer(options = {}) {
     };
   }
 
-  function mockServer(raml) {
+  function mockServer(raml: any) {
     const endpoints = ramlResourcesToEndpoints(raml.resources);
     return resources(endpoints, mockHandler);
   }
 
-  function scenarioConfigurator(req, res) {
-    const { method, nextExampleName, nextResponseCode, route } = req.body;
-    const response = {
+  function scenarioConfigurator(req: any, res: any) {
+    const { method, nextExampleName, nextResponseCode, route }: ScenarioConfigBody = req.body;
+    const response: ScenarioConfigResponse = {
       route
     };
 
@@ -158,7 +175,7 @@ function createRamlizer(options = {}) {
     res.end();
   }
 
-  function fillStrategies(api) {
+  function fillStrategies(api: any) {
     for (const resource of api.allResources()) {
       if (resource.methods().length === 0) {
         spinner.info(
@@ -238,7 +255,7 @@ function createRamlizer(options = {}) {
     }
   }
 
-  function startServer(config = {}) {
+  function startServer(config: RamlizerServerConfig = {}) {
     const port = config.port ? config.port : 8080;
     const endpoint = config.endpoint ? config.endpoint : "ramlizer";
 
@@ -254,7 +271,7 @@ function createRamlizer(options = {}) {
     );
   }
 
-  function applyRAML(raml, file) {
+  function applyRAML(raml: any, file: string) {
     spinner.succeed();
     spinner.start(`Creating HTTP mock services for ${file}`);
 
@@ -262,10 +279,10 @@ function createRamlizer(options = {}) {
     app.use(osprey.errorHandler());
   }
 
-  function parseRAML(file) {
+  function parseRAML(file: string): Promise<void> {
     return ramlParser
       .loadApi(file)
-      .then(api => {
+      .then((api: any) => {
         spinner.succeed();
         spinner.start("Filling strategy queues");
         fillStrategies(api);
@@ -276,13 +293,13 @@ function createRamlizer(options = {}) {
           file
         );
       })
-      .catch(err => {
+      .catch((err: any) => {
         console.error(err);
         throw err;
       });
   }
 
-  async function loadFolder(folderPath) {
+  async function loadFolder(folderPath: string): Promise<void> {
     const files = await fs.promises.readdir(folderPath);
     const ramlFiles = files.filter(el => /\.raml$/.test(el));
     for (const file of ramlFiles) {
@@ -290,14 +307,14 @@ function createRamlizer(options = {}) {
     }
   }
 
-  function listen(port) {
+  function listen(port: number): Promise<http.Server> {
     return new Promise((resolve, reject) => {
       spinner.succeed();
       spinner.start("Launching HTTP server");
       const server = http.createServer((req, res) => {
         app(req, res, finalhandler(req, res));
       });
-      server.listen(port, err => {
+      server.listen(port, (err?: Error) => {
         if (err) return reject(err);
         spinner.succeed();
         spinner.info(`Listening on http://localhost:${port}`);
@@ -317,7 +334,9 @@ function createRamlizer(options = {}) {
   };
 }
 
-async function startRamlizer(argv) {
+export async function startRamlizer(
+  argv: RamlizerOptions & { folder: string }
+): Promise<StartedRamlizer> {
   const ramlizer = createRamlizer(argv);
   const port = argv.port ? argv.port : 8080;
   ramlizer.startServer(argv);
@@ -325,34 +344,3 @@ async function startRamlizer(argv) {
   const server = await ramlizer.listen(port);
   return { ...ramlizer, server };
 }
-
-if (require.main === module) {
-  const argv = yargs(hideBin(process.argv))
-    .option("folder", {
-      alias: "f",
-      describe: "path to the raml files to mock",
-      requiresArg: true,
-      type: "string"
-    })
-    .option("port", {
-      describe: "port to use",
-      type: "number"
-    })
-    .option("endpoint", {
-      describe: "endpoint for scenario configuration",
-      type: "string"
-    })
-    .demandOption("folder")
-    .parseSync();
-
-  startRamlizer(argv).catch(err => {
-    console.error(err);
-    process.exit(1);
-  });
-}
-
-module.exports = {
-  createRamlizer,
-  startRamlizer,
-  ramlResourcesToEndpoints
-};
