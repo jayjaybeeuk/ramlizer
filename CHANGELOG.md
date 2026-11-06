@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/jayjaybeeuk/ramlizer/compare/v1.1.2...v1.2.0) (2026-11-06)
+
+
+### Features
+
+* convert to typescript and build using rollup ([8d77a7f](https://github.com/jayjaybeeuk/ramlizer/commit/8d77a7fb01baca806c6e74d7fbe06713501fc3ad))
+
 ## [1.1.2](https://github.com/jayjaybeeuk/ramlizer/compare/v1.1.1...v1.1.2) (2026-11-01)
 
 

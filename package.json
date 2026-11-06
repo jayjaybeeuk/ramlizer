@@ -1,6 +1,6 @@
 {
   "name": "ramlizerjs",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "A strategizer for RAML",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
