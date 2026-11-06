@@ -92,6 +92,20 @@ Ramlizer supports RAML 1.0 specifications and provides backwards compatibility w
 - **Auto-generated Mock Payloads**: When no explicit example is provided, Ramlizer synthesizes realistic mock responses from property declarations (handling strings, numbers, booleans, arrays, nested types, and enums).
 - **RAML 0.8 Compatibility**: Supports legacy `#%RAML 0.8` specifications with `schemas:` and JSON examples.
 
+#### Included Examples
+
+The `example_raml/` folder contains ready-to-run specifications demonstrating these features:
+- `example_login.raml`: RAML 1.0 endpoint with multiple named response examples (`badUsername`, `badPassword`).
+- `example_logout.raml`: RAML 1.0 endpoint showing default response codes and example switching.
+- `example_users.raml`: RAML 1.0 Data Types (`types:`), type inheritance (`AdminUser` extending `BaseUser`), type-level named examples (`CustomerUser` with `goldMember` and `silverMember`), array payloads (`Product[]`), and synthesized mock responses (`Product`).
+- `example_legacy.raml`: Legacy RAML 0.8 specification with JSON Schema and example response running alongside RAML 1.0 files.
+
+Run them live with:
+
+```bash
+npm run example
+```
+
 #### Script options
 
 _--folder_

@@ -394,6 +394,93 @@ describe("ramlizer server integration", () => {
       errorList: [{ failureType: "badPassword" }]
     });
   });
+
+  test("GET /admins from example_raml returns typed AdminUser", async () => {
+    const res = await request({
+      hostname: "localhost",
+      port: testPort,
+      path: "/admins",
+      method: "GET"
+    });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.data, {
+      id: 1,
+      email: "admin@example.com",
+      role: "superadmin",
+      active: true
+    });
+  });
+
+  test("GET /customers from example_raml returns goldMember and reconfigures to silverMember", async () => {
+    const defaultRes = await request({
+      hostname: "localhost",
+      port: testPort,
+      path: "/customers",
+      method: "GET"
+    });
+    assert.strictEqual(defaultRes.status, 200);
+    assert.deepStrictEqual(defaultRes.data, {
+      id: 101,
+      email: "gold@example.com",
+      tier: "gold"
+    });
+
+    const configRes = await request(
+      {
+        hostname: "localhost",
+        port: testPort,
+        path: "/ramlizer",
+        method: "POST"
+      },
+      {
+        route: "/customers",
+        method: "get",
+        nextExampleName: "silverMember"
+      }
+    );
+    assert.strictEqual(configRes.status, 200);
+
+    const silverRes = await request({
+      hostname: "localhost",
+      port: testPort,
+      path: "/customers",
+      method: "GET"
+    });
+    assert.strictEqual(silverRes.status, 200);
+    assert.deepStrictEqual(silverRes.data, {
+      id: 102,
+      email: "silver@example.com",
+      tier: "silver"
+    });
+  });
+
+  test("GET /products/catalog from example_raml returns array of typed mock products", async () => {
+    const res = await request({
+      hostname: "localhost",
+      port: testPort,
+      path: "/products/catalog",
+      method: "GET"
+    });
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.data));
+    assert.strictEqual(res.data[0].sku, "sku");
+    assert.strictEqual(res.data[0].stock, 0);
+    assert.strictEqual(res.data[0].inStock, true);
+  });
+
+  test("GET /legacy/status from example_raml serves RAML 0.8 endpoint", async () => {
+    const res = await request({
+      hostname: "localhost",
+      port: testPort,
+      path: "/legacy/status",
+      method: "GET"
+    });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.data, {
+      status: "operational",
+      uptime: 86400
+    });
+  });
 });
 
 describe("RAML 1.0 advanced specification server integration", () => {
