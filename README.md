@@ -84,6 +84,14 @@ And here's the JSON response when you call the `/login` endpoint:
 
 If you add multiple files to the target RAML folder, Ramlizer will process them all and create multiple end-points from your files.
 
+#### RAML specification support
+
+Ramlizer supports RAML 1.0 specifications and provides backwards compatibility with RAML 0.8:
+- **RAML 1.0 Data Types (`types:`)**: Reusable data models, type inheritance, array types (`type: Item[]`), union types, and property constraints. Examples and properties defined on types are automatically resolved and served.
+- **Multiple & Single Examples**: Supports both named `examples:` (maps or lists) and single `example:` / `structuredExample` declarations on endpoints and custom types.
+- **Auto-generated Mock Payloads**: When no explicit example is provided, Ramlizer synthesizes realistic mock responses from property declarations (handling strings, numbers, booleans, arrays, nested types, and enums).
+- **RAML 0.8 Compatibility**: Supports legacy `#%RAML 0.8` specifications with `schemas:` and JSON examples.
+
 #### Script options
 
 _--folder_

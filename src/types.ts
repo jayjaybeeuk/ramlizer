@@ -66,3 +66,18 @@ export interface ScenarioConfigResponse {
   nextExampleName?: string;
   oldExampleName?: string;
 }
+
+export interface NormalizedExample {
+  name: string;
+  value: any;
+}
+
+export interface ResolvedTypeDefinition {
+  name: string;
+  type?: any;
+  items?: any;
+  properties?: Record<string, any>;
+  examples?: any[];
+  example?: any;
+  structuredExample?: any;
+}
