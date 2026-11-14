@@ -1,7 +1,7 @@
 import typescript from "@rollup/plugin-typescript";
 import resolve from "@rollup/plugin-node-resolve";
 import { builtinModules } from "node:module";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const pkg = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8")
@@ -16,6 +16,25 @@ const isExternal = id => {
     dependencies.some(dep => id === dep || id.startsWith(dep + "/"))
   );
 };
+
+// Ships the static admin interface (src/ui) next to the bundles as dist/ui.
+const copyAdminUi = () => ({
+  name: "copy-admin-ui",
+  buildStart() {
+    for (const file of readdirSync("src/ui")) {
+      this.addWatchFile(`src/ui/${file}`);
+    }
+  },
+  generateBundle() {
+    for (const file of readdirSync("src/ui")) {
+      this.emitFile({
+        type: "asset",
+        fileName: `ui/${file}`,
+        source: readFileSync(`src/ui/${file}`)
+      });
+    }
+  }
+});
 
 export default [
   {
@@ -40,7 +59,8 @@ export default [
         tsconfig: "./tsconfig.json",
         declaration: true,
         declarationDir: "./dist"
-      })
+      }),
+      copyAdminUi()
     ]
   },
   {

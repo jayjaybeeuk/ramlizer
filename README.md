@@ -80,6 +80,36 @@ And here's the JSON response when you call the `/login` endpoint:
 }
 ```
 
+#### Admin interface
+
+Open **http://localhost:8080/ramlizer/** while ramlizer is running to switch scenarios from a browser instead of with `curl`:
+
+- **Switch responses** – every endpoint lists each response code and named example declared in the RAML (plus "generated" for responses ramlizer synthesises). Click one and the very next call to that endpoint returns it.
+- **Preview & try** – see the exact payload that will be served, and fire a real request at the mock from the page.
+- **Switch RAML files** – turn whole files on or off. When two enabled files declare the same method and route, the one listed first serves it and the other is marked *shadowed*, so you can keep alternative versions of an API side by side and flip between them.
+- **Reload RAML** – re-read the folder from disk to pick up edited, added or removed files without restarting.
+- **Live requests** – a running log of calls to the mock, showing which status and example each one received.
+- **Copy curl** – copies the configuration call for the current selection, ready to paste into a test script.
+
+Pass `--no-ui` to turn the interface off; the API below stays available.
+
+#### Admin API
+
+The interface is built on a JSON API under the same endpoint (`/ramlizer` by default), which you can also call from test suites:
+
+| Method | Path | Body | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/ramlizer/api/state` | – | Loaded files, every operation with its responses and examples, and the current selection |
+| `POST` | `/ramlizer/api/select` | `{ "method", "route", "code"?, "example"? }` or an array of them | Switch one or many endpoints. Unknown codes or example names return `400` |
+| `POST` | `/ramlizer/api/reset` | `{}` or `{ "method", "route" }` | Restore defaults for everything, or for one endpoint |
+| `POST` | `/ramlizer/api/spec` | `{ "id": "example_login.raml", "enabled": false }` | Turn a RAML file on or off |
+| `POST` | `/ramlizer/api/reload` | `{}` | Re-read RAML files from disk |
+| `GET` | `/ramlizer/api/log?since=<id>` | – | Mock requests received after `id` |
+
+The original `POST /ramlizer` endpoint described above is unchanged.
+
+The admin interface and API have no authentication, so only run ramlizer on networks you trust.
+
 #### Multiple RAML files
 
 If you add multiple files to the target RAML folder, Ramlizer will process them all and create multiple end-points from your files.
@@ -119,3 +149,7 @@ This option sets the port Ramlizer will use. By default this is '8080'.
 _--endpoint_
 
 This option sets the endpoint Ramlizer will use for its endpoint. By default this is 'ramlizer'.
+
+_--no-ui_
+
+Don't serve the graphical admin interface. The admin API is still available.

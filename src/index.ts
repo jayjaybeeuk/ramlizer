@@ -1,4 +1,3 @@
-import _ from "lodash";
 import oraModule from "ora";
 import http from "node:http";
 import path from "node:path";
@@ -12,401 +11,48 @@ import bodyParser from "body-parser";
 import Negotiator from "negotiator";
 import cors from "cors";
 
+import {
+  extractExamples,
+  extractTypesMap,
+  generateMockResponse,
+  ramlResourcesToEndpoints
+} from "./raml";
+import {
+  buildCatalogue,
+  buildOperationStates,
+  detectRamlVersion,
+  effectiveExample,
+  operationKey
+} from "./catalogue";
+import { registerAdminRoutes } from "./admin";
 import type {
-  Endpoint,
-  EndpointOperation,
-  RamlResource,
+  OperationState,
   RamlizerOptions,
   RamlizerServerConfig,
   RamlizerInstance,
-  StartedRamlizer,
-  ScenarioConfigBody,
-  ScenarioConfigResponse,
-  NormalizedExample,
-  ResolvedTypeDefinition
+  RamlizerState,
+  RequestLogEntry,
+  ScenarioSelection,
+  SpecRecord,
+  SpecSummary,
+  StartedRamlizer
 } from "./types";
 
 export * from "./types";
+export * from "./raml";
+export {
+  buildCatalogue,
+  buildOperationStates,
+  detectRamlVersion,
+  effectiveExample,
+  operationKey
+} from "./catalogue";
 
 const ora = (oraModule as any)?.default || oraModule;
 
-export function normalizeExampleValue(ex: any): any {
-  if (ex === null || ex === undefined) return ex;
+const REQUEST_LOG_LIMIT = 200;
 
-  // RAML 1.0 structuredValue
-  if (typeof ex === "object" && "structuredValue" in ex) {
-    return normalizeExampleValue(ex.structuredValue);
-  }
-
-  // RAML 1.0 example object wrapper with value property
-  if (
-    typeof ex === "object" &&
-    "value" in ex &&
-    ("strict" in ex ||
-      "displayName" in ex ||
-      "description" in ex ||
-      "annotations" in ex ||
-      Object.keys(ex).length <= 4)
-  ) {
-    return normalizeExampleValue(ex.value);
-  }
-
-  // If example is a JSON-encoded string (common in RAML 0.8 / 1.0 schema examples)
-  if (typeof ex === "string") {
-    const trimmed = ex.trim();
-    if (
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    ) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return ex;
-      }
-    }
-  }
-
-  return ex;
-}
-
-export function extractTypesMap(json: any): Record<string, any> {
-  const map: Record<string, any> = {};
-  if (!json) return map;
-
-  const typeEntries = [...(json.types || []), ...(json.schemas || [])];
-  for (const entry of typeEntries) {
-    if (!entry) continue;
-    if (typeof entry === "object") {
-      const keys = Object.keys(entry);
-      if (keys.length === 1 && typeof entry[keys[0]] === "object") {
-        map[keys[0]] = entry[keys[0]];
-      } else if (entry.name) {
-        map[entry.name] = entry;
-      } else {
-        Object.assign(map, entry);
-      }
-    }
-  }
-  return map;
-}
-
-export function cleanTypeName(rawType: any): { typeName: string; isArray: boolean } {
-  if (!rawType) return { typeName: "", isArray: false };
-  let typeStr =
-    typeof rawType === "string"
-      ? rawType
-      : Array.isArray(rawType) && typeof rawType[0] === "string"
-        ? rawType[0]
-        : "";
-  if (!typeStr) return { typeName: "", isArray: false };
-  typeStr = typeStr.trim();
-
-  // Handle union types (take the first variant)
-  if (typeStr.includes("|")) {
-    typeStr = typeStr.split("|")[0].trim();
-  }
-
-  let isArray = false;
-  if (typeStr.endsWith("[]")) {
-    isArray = true;
-    typeStr = typeStr.slice(0, -2).trim();
-  }
-
-  return { typeName: typeStr, isArray };
-}
-
-export function resolveTypeDefinition(
-  typeName: string,
-  typesMap: Record<string, any> = {},
-  visited = new Set<string>()
-): ResolvedTypeDefinition | null {
-  if (!typeName || typeof typeName !== "string" || visited.has(typeName)) {
-    return null;
-  }
-  const def = typesMap[typeName];
-  if (!def || typeof def !== "object") return null;
-
-  visited.add(typeName);
-  const resolved: ResolvedTypeDefinition = {
-    name: typeName,
-    type: def.type,
-    items: def.items,
-    properties: {},
-    examples: def.examples ? _.cloneDeep(def.examples) : undefined,
-    example: def.example !== undefined ? def.example : undefined,
-    structuredExample: def.structuredExample
-  };
-
-  const parents = Array.isArray(def.type) ? def.type : [def.type];
-  for (const parent of parents) {
-    if (parent && typeof parent === "string" && typesMap[parent]) {
-      const parentResolved = resolveTypeDefinition(parent, typesMap, new Set(visited));
-      if (parentResolved) {
-        resolved.properties = { ...parentResolved.properties, ...resolved.properties };
-        if (resolved.examples === undefined && parentResolved.examples !== undefined) {
-          resolved.examples = _.cloneDeep(parentResolved.examples);
-        }
-        if (resolved.example === undefined && parentResolved.example !== undefined) {
-          resolved.example = parentResolved.example;
-          resolved.structuredExample = parentResolved.structuredExample;
-        }
-      }
-    }
-  }
-
-  if (def.properties && typeof def.properties === "object") {
-    resolved.properties = { ...resolved.properties, ...def.properties };
-  }
-
-  return resolved;
-}
-
-export function mockValueFromProperty(
-  prop: any,
-  typesMap: Record<string, any> = {},
-  depth = 0
-): any {
-  if (depth > 5 || !prop) return "";
-  if (prop.example !== undefined) return normalizeExampleValue(prop.example);
-  if (prop.structuredExample !== undefined) return normalizeExampleValue(prop.structuredExample);
-  if (prop.default !== undefined) return prop.default;
-  if (Array.isArray(prop.enum) && prop.enum.length > 0) return _.sample(prop.enum);
-
-  const rawType = Array.isArray(prop.type) ? prop.type[0] : prop.type;
-  const { typeName, isArray } = cleanTypeName(rawType || prop.typePropertyKind || "string");
-  const lower = typeName.toLowerCase();
-
-  if (isArray || lower === "array") {
-    const rawItems = Array.isArray(prop.items) ? prop.items[0] : prop.items;
-    const itemClean = cleanTypeName(rawItems);
-    if (itemClean.typeName && typesMap[itemClean.typeName]) {
-      const itemResolved = resolveTypeDefinition(itemClean.typeName, typesMap);
-      if (itemResolved) {
-        return [mockValueFromResolvedType(itemResolved, typesMap, depth + 1)];
-      }
-    }
-    return [];
-  }
-
-  if (lower === "integer" || lower === "number") return 0;
-  if (lower === "boolean") return true;
-  if (lower === "object") {
-    if (prop.properties && typeof prop.properties === "object") {
-      const obj: Record<string, any> = {};
-      for (const [k, v] of Object.entries(prop.properties)) {
-        obj[k] = mockValueFromProperty(v, typesMap, depth + 1);
-      }
-      return obj;
-    }
-    return {};
-  }
-
-  if (typeName && typesMap[typeName]) {
-    const customResolved = resolveTypeDefinition(typeName, typesMap);
-    if (customResolved) {
-      return mockValueFromResolvedType(customResolved, typesMap, depth + 1);
-    }
-  }
-
-  return prop.name || "";
-}
-
-export function mockValueFromResolvedType(
-  resolved: ResolvedTypeDefinition,
-  typesMap: Record<string, any> = {},
-  depth = 0
-): any {
-  if (resolved.example !== undefined) return normalizeExampleValue(resolved.example);
-  if (resolved.structuredExample !== undefined) return normalizeExampleValue(resolved.structuredExample);
-  if (Array.isArray(resolved.examples) && resolved.examples.length > 0) {
-    return normalizeExampleValue(resolved.examples[0]);
-  }
-
-  const { typeName, isArray } = cleanTypeName(resolved.type);
-  if (isArray || typeName.toLowerCase() === "array") {
-    const rawItems = Array.isArray(resolved.items) ? resolved.items[0] : resolved.items;
-    const itemClean = cleanTypeName(rawItems);
-    if (itemClean.typeName && typesMap[itemClean.typeName]) {
-      const itemResolved = resolveTypeDefinition(itemClean.typeName, typesMap);
-      if (itemResolved) {
-        return [mockValueFromResolvedType(itemResolved, typesMap, depth + 1)];
-      }
-    }
-    return [];
-  }
-
-  const obj: Record<string, any> = {};
-  for (const [k, v] of Object.entries(resolved.properties || {})) {
-    obj[k] = mockValueFromProperty(v, typesMap, depth + 1);
-  }
-  return obj;
-}
-
-export function extractExamples(
-  body: any,
-  typesMap: Record<string, any> = {}
-): NormalizedExample[] {
-  if (!body) return [];
-  const results: NormalizedExample[] = [];
-
-  // 1. Explicit body.examples (array or object map)
-  if (body.examples) {
-    if (Array.isArray(body.examples)) {
-      for (let i = 0; i < body.examples.length; i++) {
-        const ex = body.examples[i];
-        const name = ex?.name || `example${i + 1}`;
-        results.push({
-          name,
-          value: normalizeExampleValue(ex)
-        });
-      }
-    } else if (typeof body.examples === "object") {
-      for (const [name, ex] of Object.entries(body.examples)) {
-        results.push({
-          name,
-          value: normalizeExampleValue(ex)
-        });
-      }
-    }
-  }
-
-  // 2. Explicit body.example or body.structuredExample
-  if (
-    results.length === 0 &&
-    (body.example !== undefined || body.structuredExample !== undefined)
-  ) {
-    const raw =
-      body.structuredExample !== undefined ? body.structuredExample : body.example;
-    const name = raw?.name || "default";
-    results.push({
-      name,
-      value: normalizeExampleValue(raw)
-    });
-  }
-
-  // 3. Examples from referenced RAML 1.0 type
-  if (results.length === 0 && body.type) {
-    const { typeName, isArray } = cleanTypeName(body.type);
-    let resolved = resolveTypeDefinition(typeName, typesMap);
-
-    if (!resolved && (body.items || isArray)) {
-      const rawItems = Array.isArray(body.items) ? body.items[0] : body.items;
-      const itemClean = cleanTypeName(rawItems);
-      resolved = resolveTypeDefinition(itemClean.typeName, typesMap);
-      if (resolved) {
-        const typeExamples = extractExamples(resolved, typesMap);
-        for (const ex of typeExamples) {
-          results.push({
-            name: ex.name,
-            value: [ex.value]
-          });
-        }
-        return results;
-      }
-    }
-
-    if (resolved) {
-      const typeExamples = extractExamples(resolved, typesMap);
-      for (const ex of typeExamples) {
-        results.push({
-          name: ex.name,
-          value: isArray ? [ex.value] : ex.value
-        });
-      }
-    }
-  }
-
-  return results;
-}
-
-export function generateMockResponse(
-  body: any,
-  typesMap: Record<string, any> = {}
-): any {
-  if (!body) return {};
-
-  // If RAML 0.8 schemaContent is present without explicit properties
-  if (body.schemaContent && (!body.properties || Object.keys(body.properties).length === 0)) {
-    try {
-      const parsed = JSON.parse(body.schemaContent);
-      if (parsed.properties && typeof parsed.properties === "object") {
-        body.properties = parsed.properties;
-      }
-    } catch {}
-  }
-
-  const { typeName, isArray } = cleanTypeName(body.type);
-  const isExplicitArray = isArray || typeName.toLowerCase() === "array";
-
-  // If body has explicit properties
-  if (body.properties && Object.keys(body.properties).length > 0) {
-    const res: Record<string, any> = {};
-    for (const [k, v] of Object.entries(body.properties)) {
-      res[k] = mockValueFromProperty(v, typesMap);
-    }
-    return isExplicitArray ? [res] : res;
-  }
-
-  // If body is an array referencing an items type
-  if (isExplicitArray) {
-    const rawItems = Array.isArray(body.items) ? body.items[0] : body.items;
-    const itemClean = cleanTypeName(rawItems);
-    if (itemClean.typeName && typesMap[itemClean.typeName]) {
-      const resolved = resolveTypeDefinition(itemClean.typeName, typesMap);
-      if (resolved) {
-        return [mockValueFromResolvedType(resolved, typesMap)];
-      }
-    }
-    return [];
-  }
-
-  // If body references a custom type in typesMap
-  if (typeName && typesMap[typeName]) {
-    const resolved = resolveTypeDefinition(typeName, typesMap);
-    if (resolved) {
-      return mockValueFromResolvedType(resolved, typesMap);
-    }
-  }
-
-  // Built-in primitive types
-  const lower = typeName.toLowerCase();
-  if (lower === "integer" || lower === "number") return 0;
-  if (lower === "boolean") return true;
-  if (lower === "string") return "";
-
-  return {};
-}
-
-export function ramlResourcesToEndpoints(
-  resList?: RamlResource[] | null,
-  prefix = ""
-): Endpoint[] {
-  let endpoints: Endpoint[] = [];
-  for (const resource of resList || []) {
-    const fullPath = prefix + (resource.relativeUri || "");
-    if (resource.methods && resource.methods.length > 0) {
-      endpoints.push({
-        path: { value: () => fullPath },
-        parameters: resource.uriParameters || [],
-        operations: resource.methods.map((methodObj: any): EndpointOperation => {
-          let currentMethod = (methodObj.method || "get").toLowerCase();
-          const op: EndpointOperation = Object.create(methodObj);
-          op.method = { value: () => currentMethod };
-          op.withMethod = (newMethod: string) => {
-            currentMethod = newMethod;
-          };
-          return op;
-        })
-      });
-    }
-    if (resource.resources) {
-      endpoints = endpoints.concat(
-        ramlResourcesToEndpoints(resource.resources, fullPath)
-      );
-    }
-  }
-  return endpoints;
-}
+type Source = { kind: "folder" | "file"; path: string };
 
 export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance {
   const silent = Boolean(options.silent);
@@ -420,233 +66,361 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
       }
     : ora("Launching").start();
 
+  // These two objects are part of the public instance, so they are only ever mutated in place.
   const plannedMethodResponseCodes: Record<string, string> = {};
   const plannedMethodExampleNames: Record<string, string> = {};
   const knownTypes: Record<string, any> = {};
 
+  const specs = new Map<string, SpecRecord>();
+  const sources: Source[] = [];
+  const requestLog: RequestLogEntry[] = [];
+  let requestSeq = 0;
+  let lastReload: string | undefined;
+  let endpointName = options.endpoint || "ramlizer";
+
+  let mockRouter: any = null;
+  let mockRouterMounted = false;
+  let reloadChain: Promise<unknown> = Promise.resolve();
+
   const app = osprey.Router();
   app.use(cors());
 
-  function mockHandler(handledRoute: any) {
-    return (req: any, res: any) => {
-      const rawMethod = handledRoute.method;
-      const method =
-        typeof rawMethod === "function"
-          ? rawMethod()
-          : rawMethod?.value
-            ? rawMethod.value()
-            : rawMethod;
-      const negotiator = new Negotiator(req);
-      const route = req.route ? req.route.path : req.url;
+  /* ------------------------------------------------------------------ mock serving */
 
-      const plannedMethodResponseCode =
-        plannedMethodResponseCodes[`${method}:${route}`];
+  function recordRequest(entry: Omit<RequestLogEntry, "id" | "time">) {
+    requestLog.push({ id: ++requestSeq, time: new Date().toISOString(), ...entry });
+    if (requestLog.length > REQUEST_LOG_LIMIT) {
+      requestLog.splice(0, requestLog.length - REQUEST_LOG_LIMIT);
+    }
+  }
 
-      const plannedResponse =
-        (plannedMethodResponseCode && handledRoute.responses?.[plannedMethodResponseCode]) ||
-        handledRoute.responses?.[200] ||
-        (handledRoute.responses && Object.values(handledRoute.responses)[0]) ||
-        {};
+  function mockHandler(specId: string) {
+    return (handledRoute: any, routePath?: string) => {
+      return (req: any, res: any) => {
+        const rawMethod = handledRoute.method;
+        const method =
+          typeof rawMethod === "function"
+            ? rawMethod()
+            : rawMethod?.value
+              ? rawMethod.value()
+              : rawMethod;
+        const negotiator = new Negotiator(req);
+        const route = routePath || (req.route ? req.route.path : req.url);
+        const key = operationKey(method, route);
 
-      const bodies = plannedResponse?.body || {};
-      const types = Object.keys(bodies);
-      const type = negotiator.mediaType(types);
-      const chosenType = type || types[0];
-      const body = (type ? bodies[type] : Object.values(bodies)[0]) || {};
+        const plannedMethodResponseCode = plannedMethodResponseCodes[key];
 
-      let response: any;
-      const examples = extractExamples(body, knownTypes);
+        const plannedResponse =
+          (plannedMethodResponseCode && handledRoute.responses?.[plannedMethodResponseCode]) ||
+          handledRoute.responses?.[200] ||
+          (handledRoute.responses && Object.values(handledRoute.responses)[0]) ||
+          {};
 
-      if (examples.length > 0) {
-        const plannedExampleName =
-          plannedMethodExampleNames[`${method}:${route}`];
+        const bodies = plannedResponse?.body || {};
+        const types = Object.keys(bodies);
+        const type = negotiator.mediaType(types);
+        const chosenType = type || types[0];
+        const body = (type ? bodies[type] : Object.values(bodies)[0]) || {};
 
-        let plannedExample = examples.find((example: any) => {
-          return example.name === plannedExampleName;
-        });
+        let response: any;
+        let servedExample = "generated";
+        const examples = extractExamples(body, knownTypes);
 
-        if (!plannedExample) {
-          plannedExample = examples[0];
+        if (examples.length > 0) {
+          const plannedExampleName = plannedMethodExampleNames[key];
+          const plannedExample =
+            examples.find(example => example.name === plannedExampleName) || examples[0];
+          response = plannedExample.value;
+          servedExample = plannedExample.name;
+        } else if (types.length === 0) {
+          servedExample = "none";
+        } else {
+          response = generateMockResponse(body, knownTypes);
         }
 
-        response = plannedExample.value;
-      } else {
-        response = generateMockResponse(body, knownTypes);
-      }
-
-      res.statusCode = Number(plannedMethodResponseCode) || 200;
-      if (chosenType) {
-        res.setHeader("Content-Type", chosenType);
-      }
-
-      if (typeof response === "string" && chosenType && !chosenType.includes("json")) {
-        res.write(response);
-      } else {
-        res.write(JSON.stringify(response));
-      }
-      res.end();
-    };
-  }
-
-  function mockServer(raml: any) {
-    if (raml) {
-      Object.assign(knownTypes, extractTypesMap(raml));
-    }
-    const endpoints = ramlResourcesToEndpoints(raml?.resources);
-    return resources(endpoints, mockHandler);
-  }
-
-  function scenarioConfigurator(req: any, res: any) {
-    const { method, nextExampleName, nextResponseCode, route }: ScenarioConfigBody = req.body;
-    const response: ScenarioConfigResponse = {
-      route
-    };
-
-    if (nextResponseCode) {
-      const oldResponseCode =
-        plannedMethodResponseCodes[`${method}:${route}`] || "none";
-      plannedMethodResponseCodes[`${method}:${route}`] = nextResponseCode;
-
-      response.nextResponseCode = nextResponseCode;
-      response.oldResponseCode = oldResponseCode;
-    }
-
-    if (nextExampleName) {
-      const oldExampleName =
-        plannedMethodExampleNames[`${method}:${route}`] || "none";
-      plannedMethodExampleNames[`${method}:${route}`] = nextExampleName;
-
-      response.nextExampleName = nextExampleName;
-      response.oldExampleName = oldExampleName;
-    }
-
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    res.write(JSON.stringify(response));
-    res.end();
-  }
-
-  function fillStrategies(api: any, typesMap: Record<string, any> = knownTypes) {
-    for (const resource of api.allResources()) {
-      if (typeof resource.methods !== "function" || resource.methods().length === 0) {
-        spinner.info(
-          `${resource.completeRelativeUri()} has no methods, skipping`
-        );
-        continue;
-      }
-
-      for (const method of resource.methods()) {
-        spinner.succeed(
-          `${resource.completeRelativeUri()} has method ${method.method()}`
-        );
-
-        if (typeof method.responses !== "function" || method.responses().length === 0) {
-          spinner.warn(
-            `${resource.completeRelativeUri()}:${method.method()} has no responses, skipping`
-          );
-          continue;
+        res.statusCode = Number(plannedMethodResponseCode) || 200;
+        if (chosenType) {
+          res.setHeader("Content-Type", chosenType);
         }
 
-        for (const response of method.responses()) {
-          const codeVal = response.code ? response.code().value() : "200";
-          spinner.succeed(
-            `${resource.completeRelativeUri()}:${method.method()} will produce a '${codeVal}' response code`
-          );
-
-          const responseJson = response.toJSON ? response.toJSON() : response;
-          const bodies = responseJson.body;
-
-          const routeKey = `${method.method()}:${resource.completeRelativeUri()}`;
-
-          if (!bodies) {
-            spinner.warn(
-              `${resource.completeRelativeUri()}:${method.method()} has no body, skipping`
-            );
-            if (!plannedMethodResponseCodes[routeKey] || codeVal === "200") {
-              plannedMethodResponseCodes[routeKey] = codeVal;
-              plannedMethodExampleNames[routeKey] = "none";
-            }
-            continue;
-          }
-
-          if (_.size(bodies) > 1) {
-            spinner.warn(
-              `${resource.completeRelativeUri()}:${method.method()} has multiple body types, picking the first`
-            );
-          }
-
-          const body = bodies[Object.keys(bodies)[0]];
-          const examples = extractExamples(body, typesMap);
-
-          const selectedCode = codeVal;
-          const selectedExample = examples.length > 0 ? examples[0].name : "none";
-
-          if (!plannedMethodResponseCodes[routeKey] || selectedCode === "200") {
-            plannedMethodResponseCodes[routeKey] = selectedCode;
-            plannedMethodExampleNames[routeKey] = selectedExample;
-          }
-
-          if (examples.length === 0) {
-            spinner.warn(
-              `${resource.completeRelativeUri()}:${method.method()}:${codeVal} has no examples, skipping`
-            );
+        if (res.statusCode !== 204 && res.statusCode !== 304) {
+          if (typeof response === "string" && chosenType && !chosenType.includes("json")) {
+            res.write(response);
           } else {
-            for (const example of examples) {
-              spinner.succeed(
-                `${resource.completeRelativeUri()}:${method.method()}:${codeVal} contains an example named '${example.name}'`
-              );
-            }
+            res.write(JSON.stringify(response === undefined ? {} : response));
           }
         }
+        res.end();
+
+        recordRequest({
+          method: String(req.method || method).toUpperCase(),
+          path: req.originalUrl || req.url,
+          route,
+          status: res.statusCode,
+          example: servedExample,
+          specId,
+          contentType: chosenType
+        });
+      };
+    };
+  }
+
+  function orderedSpecs(): SpecRecord[] {
+    return Array.from(specs.values());
+  }
+
+  /** Rebuilds the mock router from the enabled specs and swaps it in atomically. */
+  function rebuildMockRouter() {
+    for (const k of Object.keys(knownTypes)) delete knownTypes[k];
+    const enabled = orderedSpecs().filter(s => s.enabled && s.json && !s.error);
+    for (const spec of enabled) Object.assign(knownTypes, spec.types);
+
+    const router = osprey.Router();
+    for (const spec of enabled) {
+      router.use(resources(ramlResourcesToEndpoints(spec.json.resources), mockHandler(spec.id)));
+    }
+    router.use(osprey.errorHandler());
+    mockRouter = router;
+
+    if (!mockRouterMounted) {
+      mockRouterMounted = true;
+      app.use((req: any, res: any, next: any) =>
+        mockRouter ? mockRouter(req, res, next) : next()
+      );
+    }
+  }
+
+  /* ------------------------------------------------------------------ scenario planning */
+
+  function applyDefaults(spec: SpecRecord, overwrite: boolean) {
+    for (const op of spec.operations) {
+      if (overwrite || !plannedMethodResponseCodes[op.key]) {
+        plannedMethodResponseCodes[op.key] = op.defaultCode;
+        plannedMethodExampleNames[op.key] = op.defaultExample;
       }
     }
   }
 
-  function startServer(config: RamlizerServerConfig = {}) {
-    const port = config.port ? config.port : 8080;
-    const endpoint = config.endpoint ? config.endpoint : "ramlizer";
-
-    if (!silent) {
-      app.use(morgan("combined"));
+  /**
+   * After specs change (reload, enable/disable) the file now serving a route may not declare the
+   * response code that was selected; fall back to its defaults rather than send a mismatched body.
+   */
+  function sanitisePlan() {
+    for (const op of buildOperationStates(
+      orderedSpecs(),
+      plannedMethodResponseCodes,
+      plannedMethodExampleNames
+    )) {
+      if (op.active && !op.responses.some(r => r.code === plannedMethodResponseCodes[op.key])) {
+        plannedMethodResponseCodes[op.key] = op.defaultCode;
+        plannedMethodExampleNames[op.key] = op.defaultExample;
+      }
     }
-    app.use(bodyParser.json());
-    app.post(`/${endpoint}`, scenarioConfigurator);
+  }
 
-    spinner.succeed();
-    spinner.start(
-      `Listening for configuration requests on http://localhost:${port}/${endpoint}`
+  function findServingOperation(key: string): OperationState | undefined {
+    const states = buildOperationStates(
+      orderedSpecs(),
+      plannedMethodResponseCodes,
+      plannedMethodExampleNames
+    );
+    return states.find(s => s.key === key && s.active) || states.find(s => s.key === key);
+  }
+
+  function getState(): RamlizerState {
+    return {
+      endpoint: endpointName,
+      specs: orderedSpecs().map(summariseSpec),
+      operations: buildOperationStates(
+        orderedSpecs(),
+        plannedMethodResponseCodes,
+        plannedMethodExampleNames
+      ),
+      lastReload
+    };
+  }
+
+  function selectScenario(selection: ScenarioSelection | ScenarioSelection[]): OperationState[] {
+    const list = Array.isArray(selection) ? selection : [selection];
+    const keys: string[] = [];
+
+    for (const item of list) {
+      if (!item || typeof item.route !== "string" || typeof item.method !== "string") {
+        throw new Error("Each selection needs a string `route` and `method`.");
+      }
+      const key = operationKey(item.method, item.route);
+      const op = findServingOperation(key);
+      if (!op) {
+        throw new Error(`No operation ${item.method.toUpperCase()} ${item.route} is loaded.`);
+      }
+
+      if (item.code !== undefined && item.code !== null && item.code !== "") {
+        const code = String(item.code);
+        if (!op.responses.some(r => r.code === code)) {
+          throw new Error(
+            `${item.method.toUpperCase()} ${item.route} does not declare a ${code} response.`
+          );
+        }
+        plannedMethodResponseCodes[key] = code;
+        if (item.example === undefined) {
+          // Switching code without naming an example: serve that code's first example.
+          plannedMethodExampleNames[key] = effectiveExample(op, code);
+        }
+      }
+
+      if (item.example !== undefined && item.example !== null && item.example !== "") {
+        const example = String(item.example);
+        const code = plannedMethodResponseCodes[key] || op.defaultCode;
+        const response = op.responses.find(r => r.code === code);
+        const known = example === "none" || response?.examples.some(ex => ex.name === example);
+        if (!known) {
+          throw new Error(`The ${code} response of ${item.route} has no example named '${example}'.`);
+        }
+        plannedMethodExampleNames[key] = example;
+      }
+      keys.push(key);
+    }
+
+    const states = getState().operations;
+    return keys.map(
+      key => states.find(s => s.key === key && s.active) || states.find(s => s.key === key)!
     );
   }
 
-  function applyRAML(raml: any, file: string) {
-    spinner.succeed();
-    spinner.start(`Creating HTTP mock services for ${file}`);
+  function resetScenarios(filter: { method?: string; route?: string } = {}): number {
+    const targetKey =
+      filter.method && filter.route ? operationKey(filter.method, filter.route) : undefined;
+    // One plan entry per method + route: take the defaults of the spec that serves it, so a
+    // shadowed copy in another file never overrides them.
+    const owners = new Map<string, OperationState>();
+    for (const op of buildOperationStates(
+      orderedSpecs(),
+      plannedMethodResponseCodes,
+      plannedMethodExampleNames
+    )) {
+      if (targetKey && op.key !== targetKey) continue;
+      if (filter.route && !filter.method && op.route !== filter.route) continue;
+      const current = owners.get(op.key);
+      if (!current || (!current.active && op.active)) owners.set(op.key, op);
+    }
+    for (const op of owners.values()) {
+      plannedMethodResponseCodes[op.key] = op.defaultCode;
+      plannedMethodExampleNames[op.key] = op.defaultExample;
+    }
+    return owners.size;
+  }
 
-    app.use(mockServer(raml));
-    app.use(osprey.errorHandler());
+  /* ------------------------------------------------------------------ spec loading */
+
+  function summariseSpec(spec: SpecRecord): SpecSummary {
+    const { json: _json, types: _types, operations, ...rest } = spec;
+    return { ...rest, operationCount: operations.length };
+  }
+
+  function uniqueSpecId(file: string): string {
+    const existing = orderedSpecs().find(s => s.file === file);
+    if (existing) return existing.id;
+    const base = path.basename(file);
+    let id = base;
+    let n = 2;
+    while (specs.has(id)) id = `${base}-${n++}`;
+    return id;
+  }
+
+  function logStrategies(spec: SpecRecord) {
+    for (const op of spec.operations) {
+      spinner.succeed(`${op.route} has method ${op.method}`);
+      if (op.responses.length === 0) {
+        spinner.warn(`${op.route}:${op.method} has no responses, skipping`);
+        continue;
+      }
+      for (const response of op.responses) {
+        spinner.succeed(
+          `${op.route}:${op.method} will produce a '${response.code}' response code`
+        );
+        if (!response.hasBody) {
+          spinner.warn(`${op.route}:${op.method} has no body, skipping`);
+        } else if (response.examples.length === 0) {
+          spinner.warn(`${op.route}:${op.method}:${response.code} has no examples, skipping`);
+        } else {
+          for (const example of response.examples) {
+            spinner.succeed(
+              `${op.route}:${op.method}:${response.code} contains an example named '${example.name}'`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  async function loadSpec(file: string): Promise<SpecRecord> {
+    const absolute = path.resolve(file);
+    const source = await fs.promises.readFile(absolute, "utf8");
+    const api: any = await ramlParser.loadApi(absolute);
+
+    let json: any;
+    try {
+      json =
+        typeof api.expand === "function"
+          ? api.expand(true).toJSON({ serializeMetadata: false })
+          : api.toJSON({ serializeMetadata: false });
+    } catch {
+      json = api.toJSON ? api.toJSON({ serializeMetadata: false }) : api;
+    }
+
+    let warnings: string[] = [];
+    try {
+      const errors = typeof api.errors === "function" ? api.errors() : [];
+      warnings = (errors || [])
+        .slice(0, 10)
+        .map((e: any) => (e?.message ? String(e.message) : String(e)));
+    } catch {
+      warnings = [];
+    }
+
+    const id = uniqueSpecId(absolute);
+    // Types from previously loaded files remain visible, matching the original merge behaviour.
+    const types = extractTypesMap(json);
+    const typesForCatalogue = { ...knownTypes, ...types };
+
+    return {
+      id,
+      file: absolute,
+      name: path.basename(absolute),
+      title: typeof json?.title === "string" ? json.title : undefined,
+      version: json?.version !== undefined ? String(json.version) : undefined,
+      ramlVersion: detectRamlVersion(source),
+      enabled: specs.get(id)?.enabled ?? true,
+      loadedAt: new Date().toISOString(),
+      warnings,
+      operations: buildCatalogue(json, id, typesForCatalogue),
+      json,
+      types
+    };
   }
 
   function parseRAML(file: string): Promise<void> {
-    return ramlParser
-      .loadApi(file)
-      .then((api: any) => {
+    spinner.succeed();
+    spinner.start(`Parsing ${file}`);
+    return loadSpec(file)
+      .then(spec => {
+        if (!sources.some(s => s.path === spec.file)) {
+          // Files loaded through loadFolder are tracked by their folder instead.
+          if (!sources.some(s => s.kind === "folder" && path.dirname(spec.file) === s.path)) {
+            sources.push({ kind: "file", path: spec.file });
+          }
+        }
+        specs.set(spec.id, spec);
+        Object.assign(knownTypes, spec.types);
+
         spinner.succeed();
         spinner.start("Filling strategy queues");
+        logStrategies(spec);
+        applyDefaults(spec, false);
 
-        let json: any;
-        try {
-          json = typeof api.expand === "function"
-            ? api.expand(true).toJSON({ serializeMetadata: false })
-            : api.toJSON({ serializeMetadata: false });
-        } catch {
-          json = api.toJSON ? api.toJSON({ serializeMetadata: false }) : api;
-        }
-
-        const fileTypes = extractTypesMap(json);
-        Object.assign(knownTypes, fileTypes);
-
-        fillStrategies(api, knownTypes);
-        applyRAML(json, file);
+        spinner.succeed();
+        spinner.start(`Creating HTTP mock services for ${file}`);
+        rebuildMockRouter();
       })
       .catch((err: any) => {
         console.error(err);
@@ -654,11 +428,138 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
       });
   }
 
-  async function loadFolder(folderPath: string): Promise<void> {
+  async function listRamlFiles(folderPath: string): Promise<string[]> {
     const files = await fs.promises.readdir(folderPath);
-    const ramlFiles = files.filter(el => /\.raml$/.test(el));
-    for (const file of ramlFiles) {
-      await parseRAML(path.join(folderPath, file));
+    return files
+      .filter(el => /\.raml$/.test(el))
+      .sort()
+      .map(f => path.join(path.resolve(folderPath), f));
+  }
+
+  async function loadFolder(folderPath: string): Promise<void> {
+    const absolute = path.resolve(folderPath);
+    if (!sources.some(s => s.kind === "folder" && s.path === absolute)) {
+      sources.push({ kind: "folder", path: absolute });
+    }
+    for (const file of await listRamlFiles(absolute)) {
+      await parseRAML(file);
+    }
+  }
+
+  async function doReload(): Promise<RamlizerState> {
+    const wanted: string[] = [];
+    for (const source of sources) {
+      if (source.kind === "folder") {
+        try {
+          wanted.push(...(await listRamlFiles(source.path)));
+        } catch {
+          // Folder vanished: everything that came from it disappears below.
+        }
+      } else if (fs.existsSync(source.path)) {
+        wanted.push(source.path);
+      }
+    }
+
+    const previous = new Map(orderedSpecs().map(s => [s.file, s]));
+    const next = new Map<string, SpecRecord>();
+    for (const k of Object.keys(knownTypes)) delete knownTypes[k];
+
+    for (const file of wanted) {
+      const before = previous.get(file);
+      try {
+        const spec = await loadSpec(file);
+        if (before) {
+          spec.id = before.id;
+          spec.enabled = before.enabled;
+          for (const op of spec.operations) op.specId = before.id;
+        }
+        next.set(spec.id, spec);
+        Object.assign(knownTypes, spec.types);
+      } catch (err: any) {
+        const message = err?.message ? String(err.message) : String(err);
+        spinner.warn(`Could not reload ${file}: ${message}`);
+        if (before) {
+          next.set(before.id, { ...before, error: message });
+        } else {
+          const id = uniqueSpecId(file);
+          next.set(id, {
+            id,
+            file,
+            name: path.basename(file),
+            enabled: true,
+            loadedAt: new Date().toISOString(),
+            error: message,
+            warnings: [],
+            operations: [],
+            types: {}
+          });
+        }
+      }
+    }
+
+    specs.clear();
+    for (const [id, spec] of next) specs.set(id, spec);
+    for (const spec of specs.values()) applyDefaults(spec, false);
+    sanitisePlan();
+    lastReload = new Date().toISOString();
+    rebuildMockRouter();
+    spinner.info(`Reloaded ${specs.size} RAML file(s)`);
+    return getState();
+  }
+
+  function reload(): Promise<RamlizerState> {
+    const run = reloadChain.then(doReload, doReload);
+    reloadChain = run.catch(() => undefined);
+    return run;
+  }
+
+  function setSpecEnabled(id: string, enabled: boolean): SpecSummary {
+    const spec = specs.get(id);
+    if (!spec) throw new Error(`No RAML file with id '${id}' is loaded.`);
+    spec.enabled = Boolean(enabled);
+    sanitisePlan();
+    rebuildMockRouter();
+    spinner.info(`${spec.name} ${spec.enabled ? "enabled" : "disabled"}`);
+    return summariseSpec(spec);
+  }
+
+  function getRequestLog(sinceId = 0): RequestLogEntry[] {
+    return requestLog.filter(entry => entry.id > sinceId);
+  }
+
+  /* ------------------------------------------------------------------ server wiring */
+
+  function startServer(config: RamlizerServerConfig = {}) {
+    const port = config.port ? config.port : 8080;
+    endpointName = config.endpoint ? config.endpoint : endpointName;
+    const uiEnabled = (config.ui ?? options.ui) !== false;
+
+    if (!silent) {
+      app.use(morgan("combined"));
+    }
+    app.use(bodyParser.json());
+
+    const ui = registerAdminRoutes(app, {
+      basePath: `/${endpointName}`,
+      ui: uiEnabled,
+      plannedMethodResponseCodes,
+      plannedMethodExampleNames,
+      getState,
+      selectScenario,
+      resetScenarios,
+      setSpecEnabled,
+      reload,
+      getRequestLog
+    });
+
+    spinner.succeed();
+    spinner.start(
+      `Listening for configuration requests on http://localhost:${port}/${endpointName}`
+    );
+    if (uiEnabled && ui.available) {
+      spinner.succeed();
+      spinner.info(`Admin interface at http://localhost:${port}/${endpointName}/`);
+      spinner.start("Loading RAML");
     }
   }
 
@@ -669,8 +570,8 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
       const server = http.createServer((req, res) => {
         app(req, res, finalhandler(req, res));
       });
-      server.listen(port, (err?: Error) => {
-        if (err) return reject(err);
+      server.once("error", reject);
+      server.listen(port, () => {
         spinner.succeed();
         spinner.info(`Listening on http://localhost:${port}`);
         resolve(server);
@@ -685,7 +586,13 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
     startServer,
     parseRAML,
     loadFolder,
-    listen
+    listen,
+    getState,
+    selectScenario,
+    resetScenarios,
+    setSpecEnabled,
+    reload,
+    getRequestLog
   };
 }
 

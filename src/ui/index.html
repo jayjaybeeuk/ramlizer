@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ramlizer-base" content="__RAMLIZER_BASE__" />
+    <title>ramlizer · scenario control</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M10 9h7a5 5 0 0 1 1 9.9L22 24h-3.6l-3.6-5H13v5h-3zm3 3v4h4a2 2 0 0 0 0-4z' fill='white'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="__RAMLIZER_BASE__/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">r</span>
+        <div>
+          <h1>ramlizer</h1>
+          <p class="brand-sub">Live scenario control</p>
+        </div>
+      </div>
+      <div class="stats" id="stats" aria-live="polite"></div>
+      <div class="actions">
+        <span class="conn" id="conn" title="Connection to the ramlizer server">
+          <span class="conn-dot" aria-hidden="true"></span><span class="conn-text">Connecting…</span>
+        </span>
+        <button type="button" class="btn" id="reload-btn" title="Re-read RAML files from disk">
+          Reload RAML
+        </button>
+        <button type="button" class="btn btn-ghost" id="reset-all-btn" title="Restore every endpoint to its default response">
+          Reset all
+        </button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar" aria-label="RAML files and filters">
+        <section class="panel">
+          <h2 class="panel-title">RAML files</h2>
+          <p class="panel-hint">Switch whole specs on or off. Where two enabled files declare the same route, the one listed first wins.</p>
+          <ul class="spec-list" id="spec-list"></ul>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Filter</h2>
+          <label class="field">
+            <span class="sr-only">Filter endpoints</span>
+            <input type="search" id="filter-text" placeholder="Route, method or example…" autocomplete="off" />
+          </label>
+          <div class="method-filters" id="method-filters" role="group" aria-label="Filter by HTTP method"></div>
+          <label class="check">
+            <input type="checkbox" id="filter-modified" />
+            <span>Only changed from default</span>
+          </label>
+        </section>
+      </aside>
+
+      <main class="content" id="content" aria-live="off">
+        <div class="empty" id="loading">Loading scenarios…</div>
+      </main>
+
+      <aside class="activity" aria-label="Recent mock requests">
+        <div class="activity-head">
+          <h2 class="panel-title">Live requests</h2>
+          <button type="button" class="btn btn-small btn-ghost" id="clear-log-btn">Clear</button>
+        </div>
+        <ol class="log" id="log"></ol>
+        <p class="log-empty" id="log-empty">Requests to the mock API appear here as they happen.</p>
+      </aside>
+    </div>
+
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+    <script src="__RAMLIZER_BASE__/app.js"></script>
+  </body>
+</html>

@@ -812,3 +812,336 @@ describe("ramlizer CLI process execution", () => {
     assert.deepStrictEqual(res.data, { response: "success" });
   });
 });
+
+describe("admin API and graphical interface", () => {
+  let ramlizer: RamlizerInstance;
+  let server: http.Server;
+  let tmpDir: string;
+  const testPort = 8769;
+  const opts = (p: string, method = "GET") => ({
+    hostname: "localhost",
+    port: testPort,
+    path: p,
+    method
+  });
+
+  const primary = `#%RAML 1.0
+title: Primary API
+version: v1
+mediaType: application/json
+/status:
+  get:
+    responses:
+      200:
+        body:
+          examples:
+            healthy:
+              state: healthy
+            degraded:
+              state: degraded
+      503:
+        body:
+          example:
+            state: down
+/orders:
+  post:
+    responses:
+      201:
+        body:
+          example:
+            id: 1
+`;
+
+  const alternative = `#%RAML 1.0
+title: Alternative API
+version: v2
+mediaType: application/json
+/status:
+  get:
+    responses:
+      200:
+        body:
+          example:
+            state: from-alternative
+/alt-only:
+  get:
+    responses:
+      200:
+        body:
+          example:
+            alt: true
+`;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ramlizer-admin-"));
+    await fs.writeFile(path.join(tmpDir, "a_primary.raml"), primary, "utf8");
+    await fs.writeFile(path.join(tmpDir, "b_alternative.raml"), alternative, "utf8");
+
+    ramlizer = createRamlizer({ silent: true });
+    ramlizer.startServer({ port: testPort, endpoint: "ramlizer" });
+    await ramlizer.loadFolder(tmpDir);
+    server = await ramlizer.listen(testPort);
+  });
+
+  after(async () => {
+    if (server) {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => (err ? reject(err) : resolve()));
+      });
+    }
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("GET /ramlizer/api/state lists specs, operations, examples and shadowing", async () => {
+    const res = await request(opts("/ramlizer/api/state"));
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.data.endpoint, "ramlizer");
+    assert.deepStrictEqual(
+      res.data.specs.map((s: any) => [s.id, s.title, s.ramlVersion, s.enabled, s.operationCount]),
+      [
+        ["a_primary.raml", "Primary API", "1.0", true, 2],
+        ["b_alternative.raml", "Alternative API", "1.0", true, 2]
+      ]
+    );
+
+    const status = res.data.operations.find(
+      (o: any) => o.key === "get:/status" && o.specId === "a_primary.raml"
+    );
+    assert.strictEqual(status.active, true);
+    assert.strictEqual(status.defaultCode, "200");
+    assert.strictEqual(status.selectedExample, "healthy");
+    assert.deepStrictEqual(
+      status.responses.map((r: any) => [r.code, r.examples.map((e: any) => e.name)]),
+      [
+        ["200", ["healthy", "degraded"]],
+        ["503", ["default"]]
+      ]
+    );
+
+    const shadowed = res.data.operations.find(
+      (o: any) => o.key === "get:/status" && o.specId === "b_alternative.raml"
+    );
+    assert.strictEqual(shadowed.active, false);
+    assert.strictEqual(shadowed.shadowedBy, "a_primary.raml");
+  });
+
+  test("POST /ramlizer/api/select switches example and code on the fly", async () => {
+    const sel = await request(opts("/ramlizer/api/select", "POST"), {
+      method: "get",
+      route: "/status",
+      example: "degraded"
+    });
+    assert.strictEqual(sel.status, 200);
+    assert.strictEqual(sel.data.operations[0].selectedExample, "degraded");
+    assert.strictEqual(sel.data.operations[0].modified, true);
+
+    let res = await request(opts("/status"));
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.data, { state: "degraded" });
+
+    // Choosing a code without naming an example serves that code's first example.
+    await request(opts("/ramlizer/api/select", "POST"), {
+      method: "get",
+      route: "/status",
+      code: "503"
+    });
+    res = await request(opts("/status"));
+    assert.strictEqual(res.status, 503);
+    assert.deepStrictEqual(res.data, { state: "down" });
+  });
+
+  test("POST /ramlizer/api/select accepts a batch and rejects unknown variants", async () => {
+    const batch = await request(opts("/ramlizer/api/select", "POST"), [
+      { method: "get", route: "/status", code: "200", example: "healthy" },
+      { method: "post", route: "/orders", code: "201" }
+    ]);
+    assert.strictEqual(batch.status, 200);
+    assert.strictEqual(batch.data.operations.length, 2);
+
+    const badCode = await request(opts("/ramlizer/api/select", "POST"), {
+      method: "get",
+      route: "/status",
+      code: "418"
+    });
+    assert.strictEqual(badCode.status, 400);
+    assert.match(badCode.data.error, /418/);
+
+    const badExample = await request(opts("/ramlizer/api/select", "POST"), {
+      method: "get",
+      route: "/status",
+      example: "nope"
+    });
+    assert.strictEqual(badExample.status, 400);
+
+    const unknownRoute = await request(opts("/ramlizer/api/select", "POST"), {
+      method: "get",
+      route: "/missing"
+    });
+    assert.strictEqual(unknownRoute.status, 400);
+  });
+
+  test("POST /ramlizer/api/reset restores defaults", async () => {
+    await request(opts("/ramlizer/api/select", "POST"), {
+      method: "get",
+      route: "/status",
+      code: "503"
+    });
+    const one = await request(opts("/ramlizer/api/reset", "POST"), {
+      method: "get",
+      route: "/status"
+    });
+    assert.strictEqual(one.status, 200);
+    assert.ok(one.data.reset >= 1);
+
+    const res = await request(opts("/status"));
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.data, { state: "healthy" });
+
+    const all = await request(opts("/ramlizer/api/reset", "POST"), {});
+    assert.strictEqual(all.status, 200);
+    assert.ok(all.data.state.operations.every((o: any) => !o.modified));
+  });
+
+  test("POST /ramlizer/api/spec disables a RAML file so another one takes over", async () => {
+    const off = await request(opts("/ramlizer/api/spec", "POST"), {
+      id: "a_primary.raml",
+      enabled: false
+    });
+    assert.strictEqual(off.status, 200);
+    assert.strictEqual(off.data.spec.enabled, false);
+
+    let res = await request(opts("/status"));
+    assert.deepStrictEqual(res.data, { state: "from-alternative" });
+    res = await request(opts("/orders", "POST"));
+    assert.strictEqual(res.status, 404);
+
+    const on = await request(opts("/ramlizer/api/spec", "POST"), {
+      id: "a_primary.raml",
+      enabled: true
+    });
+    assert.strictEqual(on.data.spec.enabled, true);
+    res = await request(opts("/status"));
+    assert.deepStrictEqual(res.data, { state: "healthy" });
+
+    // A selected code the newly-serving file does not declare falls back to that file's default.
+    await request(opts("/ramlizer/api/select", "POST"), { method: "get", route: "/status", code: "503" });
+    await request(opts("/ramlizer/api/spec", "POST"), { id: "a_primary.raml", enabled: false });
+    res = await request(opts("/status"));
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.data, { state: "from-alternative" });
+    await request(opts("/ramlizer/api/spec", "POST"), { id: "a_primary.raml", enabled: true });
+    await request(opts("/ramlizer/api/reset", "POST"), {});
+
+    const bad = await request(opts("/ramlizer/api/spec", "POST"), { id: "nope", enabled: true });
+    assert.strictEqual(bad.status, 400);
+  });
+
+  test("POST /ramlizer/api/reload picks up edited and new files without restarting", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "b_alternative.raml"),
+      alternative.replace("alt: true", "alt: edited"),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(tmpDir, "c_new.raml"),
+      `#%RAML 1.0
+title: New API
+/fresh:
+  get:
+    responses:
+      200:
+        body:
+          application/json:
+            example:
+              fresh: true
+`,
+      "utf8"
+    );
+
+    const reload = await request(opts("/ramlizer/api/reload", "POST"), {});
+    assert.strictEqual(reload.status, 200);
+    assert.deepStrictEqual(
+      reload.data.specs.map((s: any) => s.id),
+      ["a_primary.raml", "b_alternative.raml", "c_new.raml"]
+    );
+
+    let res = await request(opts("/alt-only"));
+    assert.deepStrictEqual(res.data, { alt: "edited" });
+    res = await request(opts("/fresh"));
+    assert.deepStrictEqual(res.data, { fresh: true });
+  });
+
+  test("GET /ramlizer/api/log reports recent mock requests and served examples", async () => {
+    const before = await request(opts("/ramlizer/api/log"));
+    const lastId = before.data.entries.length
+      ? before.data.entries[before.data.entries.length - 1].id
+      : 0;
+
+    await request(opts("/status"));
+    const log = await request(opts(`/ramlizer/api/log?since=${lastId}`));
+    assert.strictEqual(log.status, 200);
+    assert.strictEqual(log.data.entries.length, 1);
+    assert.strictEqual(log.data.entries[0].method, "GET");
+    assert.strictEqual(log.data.entries[0].route, "/status");
+    assert.strictEqual(log.data.entries[0].status, 200);
+    assert.strictEqual(log.data.entries[0].example, "healthy");
+    assert.strictEqual(log.data.entries[0].specId, "a_primary.raml");
+  });
+
+  test("legacy POST /ramlizer still switches scenarios", async () => {
+    const res = await request(opts("/ramlizer", "POST"), {
+      route: "/status",
+      method: "get",
+      nextExampleName: "degraded"
+    });
+    assert.deepStrictEqual(res.data, {
+      route: "/status",
+      nextExampleName: "degraded",
+      oldExampleName: "healthy"
+    });
+    const status = await request(opts("/status"));
+    assert.deepStrictEqual(status.data, { state: "degraded" });
+  });
+
+  test("GET /ramlizer/ serves the admin interface and its assets", async () => {
+    const page = await request({ ...opts("/ramlizer/"), headers: { Accept: "text/html" } });
+    assert.strictEqual(page.status, 200);
+    assert.match(page.raw, /<meta name="ramlizer-base" content="\/ramlizer"/);
+    assert.match(page.raw, /src="\/ramlizer\/app\.js"/);
+    assert.doesNotMatch(page.raw, /__RAMLIZER_BASE__/);
+
+    const js = await request(opts("/ramlizer/app.js"));
+    assert.strictEqual(js.status, 200);
+    assert.match(js.raw, /api\/state/);
+
+    const css = await request(opts("/ramlizer/app.css"));
+    assert.strictEqual(css.status, 200);
+  });
+});
+
+describe("admin interface can be disabled", () => {
+  let ramlizer: RamlizerInstance;
+  let server: http.Server;
+  const testPort = 8770;
+
+  before(async () => {
+    ramlizer = createRamlizer({ silent: true, ui: false });
+    ramlizer.startServer({ port: testPort, endpoint: "mockctl" });
+    await ramlizer.loadFolder(path.resolve(__dirname, "../example_raml"));
+    server = await ramlizer.listen(testPort);
+  });
+
+  after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+
+  test("UI is not served but the API still works on a custom endpoint", async () => {
+    const page = await request({ hostname: "localhost", port: testPort, path: "/mockctl/", method: "GET" });
+    assert.strictEqual(page.status, 404);
+    const state = await request({ hostname: "localhost", port: testPort, path: "/mockctl/api/state", method: "GET" });
+    assert.strictEqual(state.status, 200);
+    assert.strictEqual(state.data.endpoint, "mockctl");
+  });
+});
