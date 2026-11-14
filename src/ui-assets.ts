@@ -14,6 +14,19 @@ export type UiAsset = (typeof UI_ASSETS)[number];
 
 const BASE_PLACEHOLDER = /__RAMLIZER_BASE__/g;
 
+function escapeHtmlAttr(str: string): string {
+  return str.replace(/["&'<>]/g, c => {
+    switch (c) {
+      case '"': return "&quot;";
+      case "&": return "&amp;";
+      case "'": return "&#39;";
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      default: return c;
+    }
+  });
+}
+
 /**
  * The UI files live in `src/ui` during development and are copied to `dist/ui` by the build, next
  * to the bundle that is executing (`__dirname` in CommonJS, `import.meta.url` in the ES build).
@@ -55,7 +68,8 @@ export function createUiAssetServer(basePath: string, uiDir = resolveUiDir()): U
     try {
       let content = fs.readFileSync(path.join(uiDir, asset));
       if (asset === "index.html") {
-        content = Buffer.from(content.toString("utf8").replace(BASE_PLACEHOLDER, basePath), "utf8");
+        const safeBase = escapeHtmlAttr(basePath === "/" ? "" : basePath);
+        content = Buffer.from(content.toString("utf8").replace(BASE_PLACEHOLDER, safeBase), "utf8");
       }
       cache.set(asset, content);
       return content;
@@ -74,6 +88,7 @@ export function createUiAssetServer(basePath: string, uiDir = resolveUiDir()): U
     }
     res.statusCode = 200;
     res.setHeader("Content-Type", CONTENT_TYPES[path.extname(asset)] || "application/octet-stream");
+    res.setHeader("Content-Length", content.length);
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("X-Content-Type-Options", "nosniff");
     if (asset === "index.html") {

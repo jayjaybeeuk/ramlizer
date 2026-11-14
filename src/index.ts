@@ -76,7 +76,7 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
   const requestLog: RequestLogEntry[] = [];
   let requestSeq = 0;
   let lastReload: string | undefined;
-  let endpointName = options.endpoint || "ramlizer";
+  let endpointName = (options.endpoint || "ramlizer").replace(/^\/+|\/+$/g, "") || "ramlizer";
 
   let mockRouter: any = null;
   let mockRouterMounted = false;
@@ -206,14 +206,37 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
    * response code that was selected; fall back to its defaults rather than send a mismatched body.
    */
   function sanitisePlan() {
+    const validKeys = new Set<string>();
+    for (const spec of orderedSpecs()) {
+      for (const op of spec.operations) {
+        validKeys.add(op.key);
+      }
+    }
+
+    // Prune stale keys from specs that were deleted or reloaded without those routes
+    for (const key of Object.keys(plannedMethodResponseCodes)) {
+      if (!validKeys.has(key)) delete plannedMethodResponseCodes[key];
+    }
+    for (const key of Object.keys(plannedMethodExampleNames)) {
+      if (!validKeys.has(key)) delete plannedMethodExampleNames[key];
+    }
+
     for (const op of buildOperationStates(
       orderedSpecs(),
       plannedMethodResponseCodes,
       plannedMethodExampleNames
     )) {
-      if (op.active && !op.responses.some(r => r.code === plannedMethodResponseCodes[op.key])) {
-        plannedMethodResponseCodes[op.key] = op.defaultCode;
-        plannedMethodExampleNames[op.key] = op.defaultExample;
+      if (op.active) {
+        if (!op.responses.some(r => r.code === plannedMethodResponseCodes[op.key])) {
+          plannedMethodResponseCodes[op.key] = op.defaultCode;
+          plannedMethodExampleNames[op.key] = op.defaultExample;
+        } else {
+          plannedMethodExampleNames[op.key] = effectiveExample(
+            op,
+            plannedMethodResponseCodes[op.key] || op.defaultCode,
+            plannedMethodExampleNames[op.key]
+          );
+        }
       }
     }
   }
@@ -242,7 +265,16 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
 
   function selectScenario(selection: ScenarioSelection | ScenarioSelection[]): OperationState[] {
     const list = Array.isArray(selection) ? selection : [selection];
-    const keys: string[] = [];
+    if (list.length === 0) {
+      throw new Error("Selection list cannot be empty.");
+    }
+
+    // Validate all selections atomically before applying any mutations
+    const validated: Array<{
+      key: string;
+      code: string;
+      example: string;
+    }> = [];
 
     for (const item of list) {
       if (!item || typeof item.route !== "string" || typeof item.method !== "string") {
@@ -254,42 +286,52 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
         throw new Error(`No operation ${item.method.toUpperCase()} ${item.route} is loaded.`);
       }
 
+      let code = plannedMethodResponseCodes[key] || op.defaultCode;
       if (item.code !== undefined && item.code !== null && item.code !== "") {
-        const code = String(item.code);
+        code = String(item.code);
         if (!op.responses.some(r => r.code === code)) {
           throw new Error(
             `${item.method.toUpperCase()} ${item.route} does not declare a ${code} response.`
           );
         }
-        plannedMethodResponseCodes[key] = code;
-        if (item.example === undefined) {
-          // Switching code without naming an example: serve that code's first example.
-          plannedMethodExampleNames[key] = effectiveExample(op, code);
-        }
       }
 
+      let example: string;
       if (item.example !== undefined && item.example !== null && item.example !== "") {
-        const example = String(item.example);
-        const code = plannedMethodResponseCodes[key] || op.defaultCode;
+        example = String(item.example);
         const response = op.responses.find(r => r.code === code);
-        const known = example === "none" || response?.examples.some(ex => ex.name === example);
+        const hasExplicitExamples = Boolean(response?.examples && response.examples.length > 0);
+        const isGenerated = example === "generated" && !hasExplicitExamples;
+        const known =
+          example === "none" ||
+          isGenerated ||
+          (response?.examples.some(ex => ex.name === example) ?? false);
         if (!known) {
           throw new Error(`The ${code} response of ${item.route} has no example named '${example}'.`);
         }
-        plannedMethodExampleNames[key] = example;
+        if (isGenerated) {
+          example = "none";
+        }
+      } else {
+        example = effectiveExample(op, code);
       }
-      keys.push(key);
+
+      validated.push({ key, code, example });
+    }
+
+    // Apply mutations only after all items have validated successfully
+    for (const entry of validated) {
+      plannedMethodResponseCodes[entry.key] = entry.code;
+      plannedMethodExampleNames[entry.key] = entry.example;
     }
 
     const states = getState().operations;
-    return keys.map(
-      key => states.find(s => s.key === key && s.active) || states.find(s => s.key === key)!
+    return validated.map(
+      entry => states.find(s => s.key === entry.key && s.active) || states.find(s => s.key === entry.key)!
     );
   }
 
   function resetScenarios(filter: { method?: string; route?: string } = {}): number {
-    const targetKey =
-      filter.method && filter.route ? operationKey(filter.method, filter.route) : undefined;
     // One plan entry per method + route: take the defaults of the spec that serves it, so a
     // shadowed copy in another file never overrides them.
     const owners = new Map<string, OperationState>();
@@ -298,8 +340,8 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
       plannedMethodResponseCodes,
       plannedMethodExampleNames
     )) {
-      if (targetKey && op.key !== targetKey) continue;
-      if (filter.route && !filter.method && op.route !== filter.route) continue;
+      if (filter.method && op.method !== String(filter.method).toLowerCase()) continue;
+      if (filter.route && op.route !== filter.route) continue;
       const current = owners.get(op.key);
       if (!current || (!current.active && op.active)) owners.set(op.key, op);
     }
@@ -524,14 +566,22 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
   }
 
   function getRequestLog(sinceId = 0): RequestLogEntry[] {
+    if (sinceId > 0 && requestLog.length > 0 && requestLog[requestLog.length - 1].id < sinceId) {
+      return requestLog;
+    }
     return requestLog.filter(entry => entry.id > sinceId);
   }
 
   /* ------------------------------------------------------------------ server wiring */
 
+  let serverStarted = false;
   function startServer(config: RamlizerServerConfig = {}) {
+    if (serverStarted) return;
+    serverStarted = true;
     const port = config.port ? config.port : 8080;
-    endpointName = config.endpoint ? config.endpoint : endpointName;
+    if (config.endpoint) {
+      endpointName = config.endpoint.replace(/^\/+|\/+$/g, "") || "ramlizer";
+    }
     const uiEnabled = (config.ui ?? options.ui) !== false;
 
     if (!silent) {

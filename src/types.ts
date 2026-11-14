@@ -37,6 +37,7 @@ export interface RamlizerOptions {
 export interface RamlizerServerConfig {
   port?: number;
   endpoint?: string;
+  ui?: boolean;
   [key: string]: any;
 }
 

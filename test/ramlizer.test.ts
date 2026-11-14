@@ -980,6 +980,16 @@ mediaType: application/json
       route: "/missing"
     });
     assert.strictEqual(unknownRoute.status, 400);
+
+    // Atomicity: if any item in a batch fails, no changes in that batch are applied
+    const failedBatch = await request(opts("/ramlizer/api/select", "POST"), [
+      { method: "get", route: "/status", code: "503" },
+      { method: "get", route: "/status", code: "999" }
+    ]);
+    assert.strictEqual(failedBatch.status, 400);
+    const unchangedRes = await request(opts("/status"));
+    assert.strictEqual(unchangedRes.status, 200);
+    assert.deepStrictEqual(unchangedRes.data, { state: "healthy" });
   });
 
   test("POST /ramlizer/api/reset restores defaults", async () => {
@@ -989,7 +999,7 @@ mediaType: application/json
       code: "503"
     });
     const one = await request(opts("/ramlizer/api/reset", "POST"), {
-      method: "get",
+      method: "GET",
       route: "/status"
     });
     assert.strictEqual(one.status, 200);
@@ -998,6 +1008,19 @@ mediaType: application/json
     const res = await request(opts("/status"));
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.data, { state: "healthy" });
+
+    // Method-only filter
+    await request(opts("/ramlizer/api/select", "POST"), {
+      method: "get",
+      route: "/status",
+      code: "503"
+    });
+    const methodReset = await request(opts("/ramlizer/api/reset", "POST"), {
+      method: "get"
+    });
+    assert.strictEqual(methodReset.status, 200);
+    const methodRes = await request(opts("/status"));
+    assert.strictEqual(methodRes.status, 200);
 
     const all = await request(opts("/ramlizer/api/reset", "POST"), {});
     assert.strictEqual(all.status, 200);
@@ -1090,10 +1113,10 @@ title: New API
     assert.strictEqual(log.data.entries[0].specId, "a_primary.raml");
   });
 
-  test("legacy POST /ramlizer still switches scenarios", async () => {
+  test("legacy POST /ramlizer still switches scenarios (case-insensitive method)", async () => {
     const res = await request(opts("/ramlizer", "POST"), {
       route: "/status",
-      method: "get",
+      method: "GET",
       nextExampleName: "degraded"
     });
     assert.deepStrictEqual(res.data, {
@@ -1103,6 +1126,18 @@ title: New API
     });
     const status = await request(opts("/status"));
     assert.deepStrictEqual(status.data, { state: "degraded" });
+
+    // Also verify uppercase method switching response code
+    const resCode = await request(opts("/ramlizer", "POST"), {
+      route: "/status",
+      method: "GET",
+      nextResponseCode: "503"
+    });
+    assert.strictEqual(resCode.data.nextResponseCode, "503");
+    assert.strictEqual(resCode.data.oldResponseCode, "200");
+    const status503 = await request(opts("/status"));
+    assert.strictEqual(status503.status, 503);
+    await request(opts("/ramlizer/api/reset", "POST"), {});
   });
 
   test("GET /ramlizer/ serves the admin interface and its assets", async () => {
@@ -1143,5 +1178,38 @@ describe("admin interface can be disabled", () => {
     const state = await request({ hostname: "localhost", port: testPort, path: "/mockctl/api/state", method: "GET" });
     assert.strictEqual(state.status, 200);
     assert.strictEqual(state.data.endpoint, "mockctl");
+  });
+});
+
+describe("endpoint path normalization and edge cases", () => {
+  let ramlizer: RamlizerInstance;
+  let server: http.Server;
+  const testPort = 8771;
+
+  before(async () => {
+    ramlizer = createRamlizer({ silent: true, endpoint: "/custom-control/" });
+    ramlizer.startServer({ port: testPort, endpoint: "/custom-control/" });
+    await ramlizer.loadFolder(path.resolve(__dirname, "../example_raml"));
+    server = await ramlizer.listen(testPort);
+  });
+
+  after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+
+  test("normalizes endpoint with leading/trailing slashes and serves clean paths", async () => {
+    const page = await request({ hostname: "localhost", port: testPort, path: "/custom-control/", method: "GET" });
+    assert.strictEqual(page.status, 200);
+    assert.match(page.raw, /<meta name="ramlizer-base" content="\/custom-control"/);
+    assert.doesNotMatch(page.raw, /content="\/\//);
+    assert.doesNotMatch(page.raw, /src="\/\//);
+
+    const state = await request({ hostname: "localhost", port: testPort, path: "/custom-control/api/state", method: "GET" });
+    assert.strictEqual(state.status, 200);
+    assert.strictEqual(state.data.endpoint, "custom-control");
+
+    // Recover log when sinceId is greater than current sequence (e.g. after server restart)
+    const log = ramlizer.getRequestLog(9999);
+    assert.ok(Array.isArray(log));
   });
 });

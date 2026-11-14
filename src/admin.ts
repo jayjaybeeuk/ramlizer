@@ -1,4 +1,5 @@
 import { createUiAssetServer, type UiAsset } from "./ui-assets";
+import { operationKey } from "./catalogue";
 import type {
   OperationState,
   RamlizerState,
@@ -52,7 +53,9 @@ function guard(handler: (req: any, res: any) => unknown | Promise<unknown>) {
     Promise.resolve()
       .then(() => handler(req, res))
       .catch((err: any) => {
-        sendJson(res, 400, { error: err?.message ? String(err.message) : String(err) });
+        if (!res.headersSent) {
+          sendJson(res, 400, { error: err?.message ? String(err.message) : String(err) });
+        }
       });
   };
 }
@@ -70,14 +73,16 @@ function guard(handler: (req: any, res: any) => unknown | Promise<unknown>) {
  *   GET  {base}/api/log?since=N recent mock requests
  */
 export function registerAdminRoutes(app: any, ctx: AdminContext) {
-  const base = ctx.basePath.replace(/\/+$/, "");
+  const rawBase = ("/" + (ctx.basePath || "")).replace(/\/+/g, "/").replace(/\/+$/, "");
+  const base = rawBase || "/";
   const assets = createUiAssetServer(base);
+  const apiPath = (sub: string) => (base === "/" ? sub : `${base}${sub}`);
 
   // Original configuration endpoint, kept byte-for-byte compatible for existing clients.
   app.post(base, (req: any, res: any) => {
     const { method, nextExampleName, nextResponseCode, route }: ScenarioConfigBody =
       req.body || {};
-    const key = `${method}:${route}`;
+    const key = operationKey(method || "", route || "");
     const response: ScenarioConfigResponse = { route };
 
     if (nextResponseCode) {
@@ -96,12 +101,12 @@ export function registerAdminRoutes(app: any, ctx: AdminContext) {
   });
 
   app.get(
-    `${base}/api/state`,
+    apiPath("/api/state"),
     guard((_req, res) => sendJson(res, 200, ctx.getState()))
   );
 
   app.post(
-    `${base}/api/select`,
+    apiPath("/api/select"),
     guard((req, res) => {
       const body = req.body;
       const selection = Array.isArray(body) ? body.map(toSelection) : toSelection(body);
@@ -110,7 +115,7 @@ export function registerAdminRoutes(app: any, ctx: AdminContext) {
   );
 
   app.post(
-    `${base}/api/reset`,
+    apiPath("/api/reset"),
     guard((req, res) => {
       const { method, route } = req.body || {};
       const count = ctx.resetScenarios({ method, route });
@@ -119,7 +124,7 @@ export function registerAdminRoutes(app: any, ctx: AdminContext) {
   );
 
   app.post(
-    `${base}/api/spec`,
+    apiPath("/api/spec"),
     guard((req, res) => {
       const { id, enabled } = req.body || {};
       if (typeof id !== "string" || typeof enabled !== "boolean") {
@@ -131,12 +136,12 @@ export function registerAdminRoutes(app: any, ctx: AdminContext) {
   );
 
   app.post(
-    `${base}/api/reload`,
+    apiPath("/api/reload"),
     guard(async (_req, res) => sendJson(res, 200, await ctx.reload()))
   );
 
   app.get(
-    `${base}/api/log`,
+    apiPath("/api/log"),
     guard((req, res) => {
       const since = Number(queryParam(req, "since") || 0);
       sendJson(res, 200, { entries: ctx.getRequestLog(Number.isFinite(since) ? since : 0) });
@@ -146,9 +151,12 @@ export function registerAdminRoutes(app: any, ctx: AdminContext) {
   if (ctx.ui) {
     const serve = (asset: UiAsset) => (_req: any, res: any) => assets.serve(asset, res);
     app.get(base, serve("index.html"));
-    app.get(`${base}/index.html`, serve("index.html"));
-    app.get(`${base}/app.js`, serve("app.js"));
-    app.get(`${base}/app.css`, serve("app.css"));
+    if (base !== "/") {
+      app.get(`${base}/`, serve("index.html"));
+    }
+    app.get(apiPath("/index.html"), serve("index.html"));
+    app.get(apiPath("/app.js"), serve("app.js"));
+    app.get(apiPath("/app.css"), serve("app.css"));
   }
 
   return { available: ctx.ui && assets.available };

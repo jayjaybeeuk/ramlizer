@@ -42,7 +42,8 @@ export function buildResponse(
 ): CatalogueResponse {
   const bodies = response?.body && typeof response.body === "object" ? response.body : {};
   const contentTypes = Object.keys(bodies);
-  const firstBody = contentTypes.length > 0 ? bodies[contentTypes[0]] : undefined;
+  const preferredType = contentTypes.find(t => t.includes("json")) || contentTypes[0];
+  const firstBody = preferredType ? bodies[preferredType] : undefined;
   const examples = firstBody ? extractExamples(firstBody, typesMap) : [];
 
   const result: CatalogueResponse = {
@@ -148,7 +149,9 @@ export function buildOperationStates(
         }
       }
 
-      const selectedCode = plannedCodes[op.key] || op.defaultCode;
+      const rawCode = plannedCodes[op.key];
+      const hasCode = rawCode && op.responses.some(r => r.code === rawCode);
+      const selectedCode = hasCode ? rawCode : op.defaultCode;
       const selectedExample = effectiveExample(op, selectedCode, plannedExamples[op.key]);
       const modified =
         selectedCode !== op.defaultCode ||

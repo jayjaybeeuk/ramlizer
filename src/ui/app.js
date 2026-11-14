@@ -2,7 +2,8 @@
 (function () {
   "use strict";
 
-  var BASE = (document.querySelector('meta[name="ramlizer-base"]') || {}).content || "/ramlizer";
+  var metaContent = (document.querySelector('meta[name="ramlizer-base"]') || {}).content;
+  var BASE = (typeof metaContent === "string" && metaContent !== "__RAMLIZER_BASE__") ? metaContent : "/ramlizer";
   var STATE_POLL_MS = 3000;
   var LOG_POLL_MS = 1500;
   var LOG_KEEP = 100;
@@ -493,7 +494,9 @@
 
   function sendTry(op, id) {
     var path = (ui.tryUrls.get(id) || sampleUrl(op.route)).trim();
-    if (path.charAt(0) !== "/") path = "/" + path;
+    if (!path.startsWith("http://") && !path.startsWith("https://") && path.charAt(0) !== "/") {
+      path = "/" + path;
+    }
     var started = performance.now();
     var init = { method: op.method.toUpperCase(), headers: { Accept: "application/json" } };
     if (["post", "put", "patch"].indexOf(op.method) >= 0) {
