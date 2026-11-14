@@ -1,3 +1,10 @@
+## [1.4.1](https://github.com/jayjaybeeuk/ramlizer/compare/v1.4.0...v1.4.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* resolve high and critical security audit vulnerabilities ([0ab0399](https://github.com/jayjaybeeuk/ramlizer/commit/0ab039962d4f509b2ec47d5a77e6e33c0ee8a947))
+
 # [1.4.0](https://github.com/jayjaybeeuk/ramlizer/compare/v1.3.0...v1.4.0) (2026-11-14)
 
 
