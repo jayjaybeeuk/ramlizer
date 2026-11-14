@@ -1,3 +1,16 @@
+# [1.4.0](https://github.com/jayjaybeeuk/ramlizer/compare/v1.3.0...v1.4.0) (2026-11-14)
+
+
+### Bug Fixes
+
+* address code review issues in admin API, routing, and UI ([13d56db](https://github.com/jayjaybeeuk/ramlizer/commit/13d56db10a90b1858e22bb696973ef5d11c9fd1a))
+* address code review issues in admin API, routing, and UI ([0a7a550](https://github.com/jayjaybeeuk/ramlizer/commit/0a7a5501e64d5d08ed3c6dc74711936f782d58f0))
+
+
+### Features
+
+* add admin API and graphical interface for switching RAML examples on the fly ([3bef3e7](https://github.com/jayjaybeeuk/ramlizer/commit/3bef3e7710ffc9dc0b8ca64c5825661e55a85c6e))
+
 # [1.3.0](https://github.com/jayjaybeeuk/ramlizer/compare/v1.2.0...v1.3.0) (2026-11-06)
 
 
