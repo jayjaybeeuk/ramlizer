@@ -99,12 +99,12 @@
 
   function statusClass(code) {
     var first = String(code).charAt(0);
-    return "status status-" + ("2345".indexOf(first) >= 0 ? first : "2");
+    return "status status-" + ("12345".indexOf(first) >= 0 ? first : "2");
   }
 
   function methodBadge(method) {
     var m = String(method).toLowerCase();
-    return h("span", { class: "method method-" + m, text: m });
+    return h("span", { class: "method method-" + m, text: m.toUpperCase() });
   }
 
   function pretty(value) {

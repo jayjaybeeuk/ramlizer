@@ -251,11 +251,12 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
   }
 
   function getState(): RamlizerState {
+    const allSpecs = orderedSpecs();
     return {
       endpoint: endpointName,
-      specs: orderedSpecs().map(summariseSpec),
+      specs: allSpecs.map(summariseSpec),
       operations: buildOperationStates(
-        orderedSpecs(),
+        allSpecs,
         plannedMethodResponseCodes,
         plannedMethodExampleNames
       ),
@@ -326,9 +327,15 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
     }
 
     const states = getState().operations;
-    return validated.map(
-      entry => states.find(s => s.key === entry.key && s.active) || states.find(s => s.key === entry.key)!
-    );
+    return validated.map(entry => {
+      const found =
+        states.find(s => s.key === entry.key && s.active) ||
+        states.find(s => s.key === entry.key);
+      if (!found) {
+        throw new Error(`Unexpected: operation ${entry.key} disappeared after validation.`);
+      }
+      return found;
+    });
   }
 
   function resetScenarios(filter: { method?: string; route?: string } = {}): number {
@@ -509,6 +516,8 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
     for (const file of wanted) {
       const before = previous.get(file);
       try {
+        // Progressively accumulate types so each spec can reference types from earlier files,
+        // matching the behaviour of the initial sequential parseRAML calls.
         const spec = await loadSpec(file);
         if (before) {
           spec.id = before.id;
@@ -567,7 +576,8 @@ export function createRamlizer(options: RamlizerOptions = {}): RamlizerInstance 
 
   function getRequestLog(sinceId = 0): RequestLogEntry[] {
     if (sinceId > 0 && requestLog.length > 0 && requestLog[requestLog.length - 1].id < sinceId) {
-      return requestLog;
+      // sinceId is beyond the newest entry (e.g. after a server restart): nothing new to report.
+      return [];
     }
     return requestLog.filter(entry => entry.id > sinceId);
   }

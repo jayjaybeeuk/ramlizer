@@ -27,11 +27,18 @@ const copyAdminUi = () => ({
   },
   generateBundle() {
     for (const file of readdirSync("src/ui")) {
-      this.emitFile({
-        type: "asset",
-        fileName: `ui/${file}`,
-        source: readFileSync(`src/ui/${file}`)
-      });
+      const filePath = `src/ui/${file}`;
+      // Guard against subdirectories that readdirSync may return.
+      try {
+        const content = readFileSync(filePath);
+        this.emitFile({
+          type: "asset",
+          fileName: `ui/${file}`,
+          source: content
+        });
+      } catch (err) {
+        if (err.code !== "EISDIR") throw err;
+      }
     }
   }
 });
@@ -79,6 +86,7 @@ export default [
         declaration: false,
         declarationMap: false
       })
+      // copyAdminUi() is intentionally omitted: the CLI does not serve UI assets itself.
     ]
   }
 ];

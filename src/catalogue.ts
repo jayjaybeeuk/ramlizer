@@ -1,5 +1,3 @@
-import _ from "lodash";
-
 import { extractExamples, generateMockResponse } from "./raml";
 import type {
   CatalogueOperation,
@@ -56,7 +54,7 @@ export function buildResponse(
 
   if (firstBody && examples.length === 0) {
     // generateMockResponse mutates the body it is given, so work on a copy.
-    result.generated = generateMockResponse(_.cloneDeep(firstBody), typesMap);
+    result.generated = generateMockResponse(structuredClone(firstBody), typesMap);
   }
 
   return result;
