@@ -18,6 +18,11 @@ export async function run(): Promise<void> {
       describe: "endpoint for scenario configuration",
       type: "string"
     })
+    .option("ui", {
+      describe: "serve the graphical admin interface at /<endpoint>/ (disable with --no-ui)",
+      type: "boolean",
+      default: true
+    })
     .demandOption("folder")
     .parseSync();
 
